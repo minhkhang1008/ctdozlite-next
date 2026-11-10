@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::http::header::{COOKIE, ORIGIN, USER_AGENT};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::session::Session;
+use crate::session::{is_trusted_zalo_url, Session};
 
 // -- command codes (`A={AUTHEN:1,PING:2,...,CTRL_*}` in the bundle) -------------
 
@@ -305,7 +305,7 @@ impl WsEvent {
     }
 }
 
-fn build_url(sess: &Session, endpoint_idx: usize) -> String {
+fn build_url(sess: &Session, endpoint_idx: usize) -> Result<String> {
     let endpoints = &sess.domains.ws;
     let base = std::env::var("ZCALL_WS")
         .ok()
@@ -335,7 +335,10 @@ fn build_url(sess: &Session, endpoint_idx: usize) -> String {
         url.push('&');
     }
     url.push_str(&extra);
-    url
+    if !is_trusted_zalo_url(&url) {
+        bail!("Refusing untrusted Zalo WebSocket URL");
+    }
+    Ok(url)
 }
 
 /// Queues the server told us to pull.
@@ -423,8 +426,12 @@ async fn run_once(
     tx: &mpsc::UnboundedSender<WsEvent>,
     endpoint_idx: usize,
 ) -> Result<String> {
-    let url = build_url(sess, endpoint_idx);
+    let url = build_url(sess, endpoint_idx)?;
     trace(format!("connect {url}"));
+
+    if !is_trusted_zalo_url(&url) {
+        bail!("Refusing untrusted Zalo WebSocket URL before authentication");
+    }
 
     let mut req = url.clone().into_client_request()?;
     {
@@ -602,6 +609,14 @@ async fn run_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_url_rejects_untrusted_saved_endpoint() {
+        let mut session = Session::new(false, false, false).unwrap();
+        session.domains.ws = vec!["wss://zalo.me.attacker.test/socket".into()];
+        let err = build_url(&session, 0).unwrap_err().to_string();
+        assert!(err.contains("untrusted Zalo WebSocket URL"), "{err}");
+    }
 
     #[test]
     fn frame_roundtrip() {

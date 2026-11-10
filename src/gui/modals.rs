@@ -1,4 +1,17 @@
 use super::*;
+
+fn canonical_download_dir(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    std::fs::canonicalize(path).and_then(|resolved| {
+        if resolved.is_absolute() {
+            Ok(resolved)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "download directory must resolve to an absolute path",
+            ))
+        }
+    })
+}
 /// Compute optimal Zoom-style gallery tile rectangles so each tile (`aspect` width/height)
 /// has maximum area and the bottom row is horizontally centered.
 pub(crate) fn compute_call_gallery_tiles(
@@ -3588,17 +3601,19 @@ impl ZaloGuiApp {
         if open_dl_dir {
             let p = std::path::PathBuf::from(&self.settings.download_dir);
             let _ = std::fs::create_dir_all(&p);
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("explorer").arg(&p).spawn();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = std::process::Command::new("open").arg(&p).spawn();
-            }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-            {
-                let _ = std::process::Command::new("xdg-open").arg(&p).spawn();
+            if let Ok(p) = canonical_download_dir(&p) {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("explorer").arg(&p).spawn();
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open").arg(&p).spawn();
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(&p).spawn();
+                }
             }
         }
 
@@ -8988,6 +9003,20 @@ fn extract_markdown_links_inline(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_directory_is_canonicalized_before_opening() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ctdozlite-download-dir-{nonce}"));
+        std::fs::create_dir(&dir).unwrap();
+        let resolved = canonical_download_dir(&dir).unwrap();
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, std::fs::canonicalize(&dir).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn call_gallery_fit_aspects_and_speaker_layout_stay_within_bounds() {

@@ -21,6 +21,70 @@ const PAGE: u32 = 50;
 /// Pages per thread per run (1 000 messages); run again to go further back.
 const MAX_PAGES: usize = 20;
 const PAUSE: Duration = Duration::from_millis(400);
+const MAX_SYNC_DOWNLOAD_BYTES: usize = 256 * 1024 * 1024;
+const MAX_DECOMPRESSED_SYNC_BYTES: usize = 512 * 1024 * 1024;
+
+async fn read_response_limited(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    if response.content_length().is_some_and(|size| size > limit as u64) {
+        anyhow::bail!("sync response exceeds the {limit}-byte download limit");
+    }
+    let mut output = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        let next_len = output
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| anyhow::anyhow!("sync response size overflow"))?;
+        if next_len > limit {
+            anyhow::bail!("sync response exceeds the {limit}-byte download limit");
+        }
+        output.extend_from_slice(&chunk);
+    }
+    Ok(output)
+}
+
+struct LimitedVecWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl LimitedVecWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+}
+
+impl std::io::Write for LimitedVecWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(buf.len())
+            .ok_or_else(|| std::io::Error::other("decompression limit exceeded"))?;
+        if next_len > self.limit {
+            return Err(std::io::Error::other("decompression limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn decompress_xz_limited(input: &[u8], limit: usize) -> Result<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(input);
+    let mut output = LimitedVecWriter::new(limit);
+    lzma_rs::xz_decompress(&mut cursor, &mut output)
+        .map_err(|error| anyhow::anyhow!("XZ decompression failed: {error}"))?;
+    Ok(output.bytes)
+}
 
 /// Set by the GUI's "Dừng" button; checked between pages.
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
@@ -437,11 +501,13 @@ pub async fn import_mobile_backup_container(
     use rusqlite::Connection;
     use serde_json::json;
     use std::collections::HashMap;
-    use std::io::Cursor;
     use crate::store::StoredMessage;
 
     if url.is_empty() {
         anyhow::bail!("empty backup url");
+    }
+    if !crate::session::is_trusted_zalo_url(url) {
+        anyhow::bail!("Refusing authenticated history download from an untrusted Zalo URL");
     }
 
     let (priv_key, pub_key_b64) = get_sync_keys()
@@ -470,7 +536,7 @@ pub async fn import_mobile_backup_container(
         anyhow::bail!("failed to download backup: HTTP {}", resp.status());
     }
 
-    let crypt_data = resp.bytes().await?;
+    let crypt_data = read_response_limited(resp, MAX_SYNC_DOWNLOAD_BYTES).await?;
     if crypt_data.len() < 48 {
         anyhow::bail!("backup file too small: {} bytes", crypt_data.len());
     }
@@ -554,9 +620,7 @@ pub async fn import_mobile_backup_container(
         .ok_or_else(|| anyhow::anyhow!("XZ footer not found"))?
         + 2;
 
-    let mut cursor = Cursor::new(&xz_slice[..end_pos]);
-    let mut payload = Vec::new();
-    lzma_rs::xz_decompress(&mut cursor, &mut payload)?;
+    let payload = decompress_xz_limited(&xz_slice[..end_pos], MAX_DECOMPRESSED_SYNC_BYTES)?;
 
     let noise_body = json!({
         "fids": fids,
@@ -586,8 +650,7 @@ pub async fn import_mobile_backup_container(
     }
 
     let mut store = crate::store::MessageStore::open("zalo_history.db")?;
-    let temp_dir = std::env::temp_dir().join(format!("ctdozlite_sync_{}", crate::param_cipher::random_hex(8)));
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_dir = crate::data_dir::PrivateTempDir::new("ctdozlite-sync")?;
 
     let my_uin = 435550501_i64;
     let my_uid = s.login.as_ref().map(|l| l.uin.clone()).unwrap_or_default();
@@ -596,7 +659,7 @@ pub async fn import_mobile_backup_container(
     let mut curr_offset = 0;
     let mut total_imported = 0;
 
-    for (name, size) in toc {
+    for (file_index, (name, size)) in toc.into_iter().enumerate() {
         if curr_offset + size > payload.len() {
             break;
         }
@@ -607,8 +670,8 @@ pub async fn import_mobile_backup_container(
             continue;
         };
 
-        let temp_db_path = temp_dir.join(&name);
-        if std::fs::write(&temp_db_path, db_bytes).is_err() {
+        let temp_db_path = temp_dir.path().join(format!("sync-{file_index}.db"));
+        if crate::data_dir::write_private_file(&temp_db_path, db_bytes).is_err() {
             continue;
         }
 
@@ -701,9 +764,10 @@ pub async fn import_mobile_backup_container(
                 total_imported += 1;
             }
         }
+        drop(stmt);
+        drop(conn);
+        let _ = std::fs::remove_file(&temp_db_path);
     }
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
 
     let mut cached_threads = crate::chat::load_threads_cache();
     let _ = store.hydrate_threads(&mut cached_threads, 50);
@@ -770,6 +834,9 @@ pub struct SyncV2Meta {
 }
 
 pub async fn import_sync_v2_meta(s: &Session, url: &str) -> Result<SyncV2Meta> {
+    if !crate::session::is_trusted_zalo_url(url) {
+        anyhow::bail!("Refusing authenticated history download from an untrusted Zalo URL");
+    }
     let uin = s.login.as_ref().map(|l| l.uin.clone()).unwrap_or_default();
     let sek = s.zpw_sek.clone().unwrap_or_default();
     let cookie_hdr = format!("zpw_sek={sek}; zpw_uin={uin}");
@@ -786,7 +853,7 @@ pub async fn import_sync_v2_meta(s: &Session, url: &str) -> Result<SyncV2Meta> {
         anyhow::bail!("failed to download v2 meta: HTTP {}", resp.status());
     }
 
-    let bytes = resp.bytes().await?;
+    let bytes = read_response_limited(resp, MAX_SYNC_DOWNLOAD_BYTES).await?;
     // wasmtime host (không cần Node.js). Keys phải tồn tại trong bộ nhớ tiến
     // trình (generate_sync_v2_keys đã chạy trước khi request sync).
     let keys = current_v2_keys()?;
@@ -968,29 +1035,38 @@ fn parse_partition(buf: &[u8]) -> Option<ParsedProtoPartition> {
 }
 
 /// Giải nén payload Sync V2 tự nhận dạng: zstd (28 b5 2f fd) / gzip (1f 8b) /
-/// zlib (78 xx) / raw. Không bao giờ fail — trả nguyên bytes khi không nhận ra.
-pub fn decompress_sync_payload(buf: &[u8]) -> Vec<u8> {
+/// zlib (78 xx) / raw với giới hạn bộ nhớ đầu ra.
+pub fn decompress_sync_payload(buf: &[u8]) -> Result<Vec<u8>> {
+    decompress_sync_payload_with_limit(buf, MAX_DECOMPRESSED_SYNC_BYTES)
+}
+
+fn decompress_sync_payload_with_limit(buf: &[u8], limit: usize) -> Result<Vec<u8>> {
     use std::io::Read;
-    if buf.len() >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 && buf[2] == 0x2f && buf[3] == 0xfd {
-        if let Ok(d) = zstd::decode_all(std::io::Cursor::new(buf)) {
-            return d;
+    fn read_limited(reader: impl Read, limit: usize) -> Result<Vec<u8>> {
+        let mut output = Vec::new();
+        reader
+            .take(limit as u64 + 1)
+            .read_to_end(&mut output)?;
+        if output.len() > limit {
+            anyhow::bail!("decompression limit exceeded ({limit} bytes)");
         }
-        return buf.to_vec();
+        Ok(output)
+    }
+
+    if buf.len() >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 && buf[2] == 0x2f && buf[3] == 0xfd {
+        let decoder = zstd::stream::read::Decoder::new(std::io::Cursor::new(buf))?;
+        return read_limited(decoder, limit);
     }
     if buf.len() >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
-        let mut out = Vec::new();
-        if flate2::read::GzDecoder::new(buf).read_to_end(&mut out).is_ok() {
-            return out;
-        }
-        return buf.to_vec();
+        return read_limited(flate2::read::GzDecoder::new(buf), limit);
     }
     if buf.len() >= 2 && buf[0] == 0x78 {
-        let mut out = Vec::new();
-        if flate2::read::ZlibDecoder::new(buf).read_to_end(&mut out).is_ok() {
-            return out;
-        }
+        return read_limited(flate2::read::ZlibDecoder::new(buf), limit);
     }
-    buf.to_vec()
+    if buf.len() > limit {
+        anyhow::bail!("decompression limit exceeded ({limit} bytes)");
+    }
+    Ok(buf.to_vec())
 }
 
 pub fn parse_sync_chunk(buf: &[u8]) -> Option<Vec<ParsedProtoPartition>> {
@@ -1027,6 +1103,9 @@ pub fn parse_sync_chunk(buf: &[u8]) -> Option<Vec<ParsedProtoPartition>> {
 }
 
 pub async fn import_sync_v2_messages(s: &Session, url: &str) -> Result<usize> {
+    if !crate::session::is_trusted_zalo_url(url) {
+        anyhow::bail!("Refusing authenticated history download from an untrusted Zalo URL");
+    }
     let uin = s.login.as_ref().map(|l| l.uin.clone()).unwrap_or_default();
     let sek = s.zpw_sek.clone().unwrap_or_default();
     let cookie_hdr = format!("zpw_sek={sek}; zpw_uin={uin}");
@@ -1043,7 +1122,7 @@ pub async fn import_sync_v2_messages(s: &Session, url: &str) -> Result<usize> {
         anyhow::bail!("failed to download v2 messages: HTTP {}", resp.status());
     }
 
-    let bytes = resp.bytes().await?;
+    let bytes = read_response_limited(resp, MAX_SYNC_DOWNLOAD_BYTES).await?;
     // wasmtime host (không cần Node.js). Multi-chunk: decrypt + unpack từng
     // chunk, nối protobuf bytes lại (đúng luồng HistoryCodec mẫu).
     let host = crate::zproto_host::ZprotoHost::load()?;
@@ -1051,12 +1130,20 @@ pub async fn import_sync_v2_messages(s: &Session, url: &str) -> Result<usize> {
     let mut parts: Vec<u8> = Vec::new();
     for chunk in crate::zproto_host::split_frames(&bytes)? {
         let res = host.decrypt_message(&chunk, &session_record)?;
-        parts.extend_from_slice(&decompress_sync_payload(&res.plaintext));
+        let decoded = decompress_sync_payload(&res.plaintext)?;
+        let combined_len = parts
+            .len()
+            .checked_add(decoded.len())
+            .ok_or_else(|| anyhow::anyhow!("decompressed sync size overflow"))?;
+        if combined_len > MAX_DECOMPRESSED_SYNC_BYTES {
+            anyhow::bail!("decompression limit exceeded ({MAX_DECOMPRESSED_SYNC_BYTES} bytes)");
+        }
+        parts.extend_from_slice(&decoded);
     }
     let decrypted_bytes = parts;
     // Nếu batch trả raw còn nén thì Rust tự nhận dạng thêm
     // (zstd/zlib/gzip — Zalo dùng cả 3 theo HistoryCodec mẫu).
-    let decompressed = decompress_sync_payload(&decrypted_bytes);
+    let decompressed = decompress_sync_payload(&decrypted_bytes)?;
 
     let partitions = parse_sync_chunk(&decompressed).unwrap_or_default();
     let db_path = crate::store::db_path_for_account(&uin);
@@ -1220,17 +1307,35 @@ mod tests {
         let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
         enc.write_all(raw).unwrap();
         let zlib_bytes = enc.finish().unwrap();
-        assert_eq!(decompress_sync_payload(&zlib_bytes), raw);
+        assert_eq!(decompress_sync_payload(&zlib_bytes).unwrap(), raw);
         // gzip
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         enc.write_all(raw).unwrap();
         let gzip_bytes = enc.finish().unwrap();
-        assert_eq!(decompress_sync_payload(&gzip_bytes), raw);
+        assert_eq!(decompress_sync_payload(&gzip_bytes).unwrap(), raw);
         // raw passthrough
-        assert_eq!(decompress_sync_payload(raw), raw);
+        assert_eq!(decompress_sync_payload(raw).unwrap(), raw);
         // zstd (encode bằng crate zstd đã có)
         let zstd_bytes = zstd::encode_all(std::io::Cursor::new(raw), 1).unwrap();
-        assert_eq!(decompress_sync_payload(&zstd_bytes), raw);
+        assert_eq!(decompress_sync_payload(&zstd_bytes).unwrap(), raw);
+    }
+
+    #[test]
+    fn decompression_stops_when_output_exceeds_limit() {
+        use std::io::Write;
+        let raw = vec![b'x'; 128];
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(&raw).unwrap();
+        let compressed = enc.finish().unwrap();
+        let err = decompress_sync_payload_with_limit(&compressed, 32)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("decompression limit"), "{err}");
+
+        let mut xz = Vec::new();
+        lzma_rs::xz_compress(&mut std::io::Cursor::new(&raw), &mut xz).unwrap();
+        let err = decompress_xz_limited(&xz, 32).unwrap_err().to_string();
+        assert!(err.contains("decompression limit"), "{err}");
     }
 
     #[test]

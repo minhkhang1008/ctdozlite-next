@@ -82,15 +82,25 @@ pub fn save_current_account_snapshot(uin: &str) -> Result<()> {
         return Ok(());
     }
     let dir = accounts_dir();
-    std::fs::create_dir_all(&dir)?;
+    crate::data_dir::ensure_private_dir(&dir)?;
     if Path::new("session.json").exists() {
-        let _ = std::fs::copy("session.json", dir.join(format!("{uin}.json")));
+        crate::data_dir::ensure_private_file(Path::new("session.json"))?;
+        crate::data_dir::copy_private(
+            Path::new("session.json"),
+            &dir.join(format!("{uin}.json")),
+        )?;
     }
     if Path::new("threads_cache.json").exists() {
-        let _ = std::fs::copy("threads_cache.json", dir.join(format!("{uin}_threads.json")));
+        crate::data_dir::copy_private(
+            Path::new("threads_cache.json"),
+            &dir.join(format!("{uin}_threads.json")),
+        )?;
     }
     if Path::new("zalo_history.db").exists() {
-        let _ = std::fs::copy("zalo_history.db", dir.join(format!("{uin}_history.db")));
+        crate::data_dir::copy_private(
+            Path::new("zalo_history.db"),
+            &dir.join(format!("{uin}_history.db")),
+        )?;
     }
     Ok(())
 }
@@ -114,16 +124,17 @@ pub fn switch_to_account(current_uin: &str, target_uin: &str) -> Result<()> {
     if !target_session.exists() {
         anyhow::bail!("Không tìm thấy dữ liệu phiên của tài khoản {target_uin}");
     }
-    std::fs::copy(&target_session, "session.json")?;
+    crate::data_dir::ensure_private_file(&target_session)?;
+    crate::data_dir::copy_private(&target_session, Path::new("session.json"))?;
 
     let target_threads = dir.join(format!("{target_uin}_threads.json"));
     if target_threads.exists() {
-        let _ = std::fs::copy(&target_threads, "threads_cache.json");
+        crate::data_dir::copy_private(&target_threads, Path::new("threads_cache.json"))?;
     }
 
     let target_db = dir.join(format!("{target_uin}_history.db"));
     if target_db.exists() {
-        let _ = std::fs::copy(&target_db, "zalo_history.db");
+        crate::data_dir::copy_private(&target_db, Path::new("zalo_history.db"))?;
     }
     Ok(())
 }

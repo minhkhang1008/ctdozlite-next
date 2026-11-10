@@ -99,17 +99,6 @@ async fn main() -> Result<()> {
     let force_gui = args.iter().any(|a| a == "--gui");
     let force_qr = args.iter().any(|a| a == "--qr");
     let force_logout = args.iter().any(|a| a == "--logout");
-    let force_mcp = args.iter().any(|a| a == "--mcp");
-    let api_port: Option<u16> = args
-        .iter()
-        .position(|a| a == "--api-port")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|v| v.parse::<u16>().ok())
-        .or_else(|| {
-            std::env::var("CTDOZLITE_API_PORT")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-        });
     let cli_proxy: Option<String> = args
         .iter()
         .position(|a| a == "--proxy")
@@ -171,25 +160,6 @@ async fn main() -> Result<()> {
     } else {
         false
     };
-
-    // If `--mcp` is requested, run the Model Context Protocol JSON-RPC 2.0 server over stdio (#35).
-    if force_mcp {
-        let shared = std::sync::Arc::new(tokio::sync::Mutex::new(s));
-        return api_mcp::run_mcp_stdio_server(shared, "zalo_history.db").await;
-    }
-
-    // If `--api-port <PORT>` is set without `--gui`/`--tui`, run headless REST + MCP server if `--api-only` is passed;
-    // otherwise spawn the REST server in the background alongside GUI/TUI (#35).
-    if let Some(port) = api_port {
-        let shared = std::sync::Arc::new(tokio::sync::Mutex::new(s.clone()));
-        println!("🌐 REST API & MCP HTTP server đang lắng nghe tại http://127.0.0.1:{port}/api/v1/status");
-        if args.iter().any(|a| a == "--api-only") {
-            return api_mcp::run_local_http_server(shared, port, "zalo_history.db".into()).await;
-        }
-        tokio::spawn(async move {
-            let _ = api_mcp::run_local_http_server(shared, port, "zalo_history.db".into()).await;
-        });
-    }
 
     // Determine launch mode:
     // If `--gui` is specified (or default when not `--tui` / `--qr` / `--phone`):

@@ -178,6 +178,125 @@ fn create_private_file(parent: &Path, prefix: &str) -> std::io::Result<(PathBuf,
     ))
 }
 
+/// Create a directory if needed and enforce owner-only access on Unix.
+pub fn ensure_private_dir(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700).create(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(path)?;
+    Ok(())
+}
+
+/// Enforce owner read/write permissions for an existing file on Unix.
+pub fn ensure_private_file(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// Create or truncate a file with owner-only permissions and write its complete contents.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!("Parent directory does not exist: {}", parent.display());
+    }
+    ensure_private_dir(parent)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    ensure_private_file(path)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Copy a sensitive file without inheriting permissive destination permissions.
+pub fn copy_private(source: &Path, destination: &Path) -> Result<u64> {
+    use std::io::Write;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    ensure_private_dir(parent)?;
+    let mut input = std::fs::File::open(source)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(destination)?;
+    ensure_private_file(destination)?;
+    let copied = std::io::copy(&mut input, &mut output)?;
+    output.flush()?;
+    output.sync_all()?;
+    Ok(copied)
+}
+
+/// Owner-only temporary directory that removes all contents when dropped.
+pub struct PrivateTempDir {
+    path: PathBuf,
+}
+
+impl PrivateTempDir {
+    /// Create a uniquely named private directory under the system temporary directory.
+    pub fn new(prefix: &str) -> Result<Self> {
+        for _ in 0..100 {
+            let path = std::env::temp_dir().join(format!(
+                "{prefix}-{}-{}",
+                std::process::id(),
+                NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
+                Ok(()) => {
+                    ensure_private_dir(&path)?;
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        bail!("Cannot create a unique private temporary directory")
+    }
+
+    /// Return the private directory path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 /// Replace a session only after the complete private temporary file is flushed.
 ///
 /// # Errors
@@ -188,6 +307,10 @@ pub fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<()> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!("Session directory does not exist: {}", parent.display());
+    }
+    ensure_private_dir(parent)?;
     let (temporary, mut file) = create_private_file(parent, ".session-tmp")
         .with_context(|| format!("Cannot create temporary session in {}", parent.display()))?;
     let result = (|| -> Result<()> {
@@ -196,6 +319,7 @@ pub fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<()> {
         drop(file);
         std::fs::rename(&temporary, path)
             .with_context(|| format!("Cannot replace session {}", path.display()))?;
+        ensure_private_file(path)?;
         Ok(())
     })();
     if result.is_err() {
@@ -208,6 +332,29 @@ pub fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn private_helpers_enforce_modes_and_cleanup_temp_data() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = fixture();
+        let private_dir = root.join("private");
+        ensure_private_dir(&private_dir).unwrap();
+        let file = private_dir.join("secret.bin");
+        write_private_file(&file, b"secret").unwrap();
+        assert_eq!(std::fs::metadata(&private_dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+
+        let temp_path;
+        {
+            let temp = PrivateTempDir::new("ctdozlite-private-test").unwrap();
+            temp_path = temp.path().to_path_buf();
+            write_private_file(&temp_path.join("decrypted.db"), b"sqlite").unwrap();
+            assert_eq!(std::fs::metadata(&temp_path).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        assert!(!temp_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn fixture() -> PathBuf {
         let path = std::env::temp_dir().join(format!(

@@ -56,6 +56,21 @@ impl MessageStore {
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
+            let db_path = std::path::Path::new(path);
+            let parent = db_path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            crate::data_dir::ensure_private_dir(parent)?;
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            drop(options.open(db_path)?);
+            enforce_sqlite_file_permissions(db_path)?;
             Connection::open(path)?
         };
 
@@ -103,6 +118,10 @@ impl MessageStore {
                  PRAGMA user_version = 1;
                  COMMIT;",
             )?;
+        }
+
+        if path != ":memory:" {
+            enforce_sqlite_file_permissions(std::path::Path::new(path))?;
         }
 
         Ok(Self { conn })
@@ -625,6 +644,17 @@ impl MessageStore {
     }
 }
 
+fn enforce_sqlite_file_permissions(path: &std::path::Path) -> Result<()> {
+    crate::data_dir::ensure_private_file(path)?;
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        if sidecar.exists() {
+            crate::data_dir::ensure_private_file(&sidecar)?;
+        }
+    }
+    Ok(())
+}
+
 impl From<&ChatMessage> for StoredMessage {
     fn from(m: &ChatMessage) -> Self {
         let mut meta = serde_json::Map::new();
@@ -903,14 +933,9 @@ pub fn import_history_from_path(src: &std::path::Path, dst_db_path: &str) -> Res
             }
         } else if bytes.len() >= 4096 {
             if let Some(decrypted_bytes) = try_decrypt_zalo_pc_database(&bytes) {
-                let tmp_dir = std::env::temp_dir();
-                let tmp_name = format!(
-                    "ctdozlite_import_{}_{}.db",
-                    std::process::id(),
-                    report.sources_read.len()
-                );
-                let tmp_path = tmp_dir.join(tmp_name);
-                if std::fs::write(&tmp_path, &decrypted_bytes).is_ok() {
+                let tmp_dir = crate::data_dir::PrivateTempDir::new("ctdozlite-import")?;
+                let tmp_path = tmp_dir.path().join("decrypted.db");
+                if crate::data_dir::write_private_file(&tmp_path, &decrypted_bytes).is_ok() {
                     if let Ok(src_conn) = Connection::open(&tmp_path) {
                         let _ = import_official_zalo_pc_db(
                             &src_conn,
@@ -938,6 +963,7 @@ fn scan_and_import_zalo_data_dir(
     dst: &mut MessageStore,
     report: &mut ImportReport,
 ) -> Result<()> {
+    let temp_dir = crate::data_dir::PrivateTempDir::new("ctdozlite-zalo-import")?;
     // 1. Recover the 32-char XOR key from Local Storage LevelDB if present
     let mut cipher_key = recover_zalo_localstorage_key(root);
     if cipher_key.is_empty() {
@@ -975,8 +1001,8 @@ fn scan_and_import_zalo_data_dir(
     for idx_path in index_files {
         if let Ok(bytes) = std::fs::read(&idx_path) {
             if let Some(dec) = decrypt_sqlcipher_bytes(&bytes, cipher_key.as_bytes()) {
-                let tmp_p = std::env::temp_dir().join(format!("idx_{}.db", std::process::id()));
-                if std::fs::write(&tmp_p, &dec).is_ok() {
+                let tmp_p = temp_dir.path().join("index.db");
+                if crate::data_dir::write_private_file(&tmp_p, &dec).is_ok() {
                     if let Ok(conn) = Connection::open(&tmp_p) {
                         let _ = query_names_from_index_db(&conn, &mut id_to_name);
                     }
@@ -999,12 +1025,8 @@ fn scan_and_import_zalo_data_dir(
                         .to_string();
                     if let Ok(bytes) = std::fs::read(&p) {
                         if let Some(dec) = decrypt_sqlcipher_bytes(&bytes, cipher_key.as_bytes()) {
-                            let tmp_p = std::env::temp_dir().join(format!(
-                                "msg_{}_{}.db",
-                                std::process::id(),
-                                stem
-                            ));
-                            if std::fs::write(&tmp_p, &dec).is_ok() {
+                            let tmp_p = temp_dir.path().join(format!("message_{stem}.db"));
+                            if crate::data_dir::write_private_file(&tmp_p, &dec).is_ok() {
                                 if let Ok(conn) = Connection::open(&tmp_p) {
                                     let thread_id = stem.clone();
                                     let (t_name, is_group) =
@@ -1653,6 +1675,25 @@ fn import_official_zalo_pc_db(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_database_enforces_private_directory_and_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ctdozlite-store-mode-{nonce}"));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let path = dir.join("zalo_history.db");
+        let store = MessageStore::open(path.to_str().unwrap()).unwrap();
+        drop(store);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn local_time_when_hydrating_seconds_and_milliseconds() {

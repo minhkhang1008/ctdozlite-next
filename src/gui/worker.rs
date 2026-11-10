@@ -386,22 +386,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                     }
                 });
 
-                // Scheduled messages worker (#38) + optional HTTP REST API server (#35)
-                if let Ok(port_str) = std::env::var("CTDOZLITE_API_PORT") {
-                    if let Ok(port) = port_str.parse::<u16>() {
-                        if port > 0 {
-                            let s_api = session.clone();
-                            tokio::spawn(async move {
-                                let _ = crate::api_mcp::run_local_http_server(
-                                    s_api,
-                                    port,
-                                    "zalo_history.db".into(),
-                                )
-                                .await;
-                            });
-                        }
-                    }
-                }
+                // Scheduled messages worker (#38)
                 {
                     let s_sched = session.clone();
                     let gui_tx_sched = gui_tx.clone();
@@ -834,27 +819,6 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             } else {
                                 tokio::time::sleep(Duration::from_secs(3)).await;
                             }
-                        }
-                    });
-                }
-
-                // 3) Periodic GitHub Releases API update checker (polls every 30 minutes)
-                {
-                    let gui_tx_upd = gui_tx.clone();
-                    let ctx_upd = egui_ctx.clone();
-                    tokio::spawn(async move {
-                        let mut ticker = tokio::time::interval(Duration::from_secs(30 * 60));
-                        // First tick fires immediately; skip it because ZaloGuiApp::new already
-                        // dispatches an initial CheckForUpdates on startup.
-                        ticker.tick().await;
-                        loop {
-                            ticker.tick().await;
-                            let res = fetch_github_latest_release().await;
-                            let _ = gui_tx_upd.send(GuiEvent::UpdateCheckFinished {
-                                result: res,
-                                silent: true,
-                            });
-                            ctx_upd.request_repaint();
                         }
                     });
                 }
@@ -3643,8 +3607,13 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
 }
 
 const GITHUB_REPO: &str = "ctdoteam1110/ctdozlite";
+const AUTO_UPDATER_ENABLED: bool = false;
 
 pub(crate) async fn fetch_github_latest_release() -> Result<UpdateCheckResult, String> {
+    if !AUTO_UPDATER_ENABLED {
+        return Err("Auto-updater is disabled in personal build".into());
+    }
+
     let current_ver = env!("CARGO_PKG_VERSION").to_string();
     let client = reqwest::Client::builder()
         .user_agent(format!("ctdozlite/{current_ver}"))
@@ -3759,6 +3728,10 @@ async fn apply_github_release_update(
     gui_tx: &GuiTx,
     ctx: &egui::Context,
 ) -> Result<bool, String> {
+    if !AUTO_UPDATER_ENABLED {
+        return Err("Auto-updater is disabled in personal build".into());
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(format!("ctdozlite/{target_version}"))
         .timeout(Duration::from_secs(240))

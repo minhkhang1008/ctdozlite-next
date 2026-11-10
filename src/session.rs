@@ -18,6 +18,25 @@ pub const ZPW_VER: &str = "694";
 pub const ZPW_TYPE: &str = "30";
 pub const CONFIG_DOMAIN: &str = "zaloapp.com";
 
+/// Return whether an absolute URL uses a secure transport and a trusted Zalo domain.
+pub fn is_trusted_zalo_url(url: &str) -> bool {
+    const TRUSTED_BASE_DOMAINS: [&str; 4] = ["zalo.me", "zaloapp.com", "zadn.vn", "zdn.vn"];
+
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "https" | "wss") {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    TRUSTED_BASE_DOMAINS
+        .iter()
+        .any(|base| host == *base || host.strip_suffix(base).is_some_and(|prefix| prefix.ends_with('.')))
+}
+
 
 // ---------------------------------------------------------------------------
 // Client-Side Privacy Blocker (block outbound typing / delivered / seen)
@@ -641,9 +660,32 @@ impl Session {
         self.http = build_http_client(&self.jar, norm.as_deref())?;
         self.proxy_url = norm.clone();
         if let Some(sek) = self.zpw_sek.clone() {
+            self.validate_session_cookie_hosts()?;
             self.set_zpw_sek(sek);
         }
         Ok(norm)
+    }
+
+    fn validate_session_cookie_hosts(&self) -> Result<()> {
+        for host in [
+            self.domains.auth.as_str(),
+            self.domains.chat.as_str(),
+            self.domains.conversation.as_str(),
+            self.domains.lp_chat.as_str(),
+            self.domains.lp_control.as_str(),
+            self.domains.convers_api.as_str(),
+            self.domains.profile.as_str(),
+            self.domains.friend.as_str(),
+            self.domains.group.as_str(),
+            self.domains.cloud_msg.as_str(),
+            self.domains.voice_call.as_str(),
+            self.domains.sticker.as_str(),
+        ] {
+            if !is_trusted_zalo_url(host) {
+                bail!("Refusing to restore session cookies for an untrusted Zalo URL");
+            }
+        }
+        Ok(())
     }
 
     /// Store `zpw_sek` session token, attach it to `self.login`, and insert the session cookie.
@@ -673,6 +715,9 @@ impl Session {
             &self.domains.sticker,
         ];
         for host in hosts {
+            if !is_trusted_zalo_url(host) {
+                continue;
+            }
             if let Ok(url) = reqwest::Url::parse(host) {
                 let cookie = format!("zpw_sek={v}; Path=/");
                 self.jar.add_cookie_str(&cookie, &url);
@@ -831,6 +876,7 @@ impl Session {
     /// Load a previously saved session from disk and restore cookies, keys, and endpoints.
     pub fn load_from_file(&mut self, path: &str) -> Result<()> {
         use base64::Engine;
+        crate::data_dir::ensure_private_file(std::path::Path::new(path))?;
         let text = std::fs::read_to_string(path)?;
         let saved: SavedSession = serde_json::from_str(&text)?;
 
@@ -884,6 +930,7 @@ impl Session {
         self.login = saved.login;
 
         if let Some(s) = sek {
+            self.validate_session_cookie_hosts()?;
             self.set_zpw_sek(s);
         } else {
             self.login = None;
@@ -1098,6 +1145,10 @@ impl Session {
         mime_type: &str,
         file_bytes: &[u8],
     ) -> Result<Value> {
+        if !is_trusted_zalo_url(url) {
+            bail!("Refusing authenticated multipart upload to an untrusted Zalo URL");
+        }
+
         let boundary = format!(
             "----WebKitFormBoundary{}",
             crate::param_cipher::random_hex(16)
@@ -1195,19 +1246,7 @@ impl Session {
         let mut rb = self.http.request(m, url);
         if let Some(ref sek) = self.zpw_sek {
             if !sek.is_empty() {
-                let is_zalo_host = reqwest::Url::parse(url)
-                    .map(|u| {
-                        u.host_str()
-                            .map(|h| {
-                                h == "zalo.me"
-                                    || h.ends_with(".zalo.me")
-                                    || h == "zaloapp.com"
-                                    || h.ends_with(".zaloapp.com")
-                            })
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or_else(|_| url.contains("zalo.me") || url.contains("zaloapp.com"));
-                if is_zalo_host {
+                if is_trusted_zalo_url(url) {
                     rb = rb.header("Cookie", format!("zpw_sek={sek}; _zlang=vi"));
                     rb = rb.header("zpw_sek", sek);
                     rb = rb.header("Origin", "https://chat.zalo.me");
@@ -1412,6 +1451,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn trusted_zalo_url_requires_secure_scheme_and_domain_boundary() {
+        for url in [
+            "https://zalo.me",
+            "https://chat.zalo.me/api/message",
+            "wss://ws1-msg.chat.zalo.me/",
+            "https://api.zaloapp.com/path",
+            "https://photo.zadn.vn/image",
+            "https://cdn.zdn.vn/file",
+        ] {
+            assert!(is_trusted_zalo_url(url), "expected trusted URL: {url}");
+        }
+
+        for url in [
+            "http://chat.zalo.me",
+            "ws://ws1-msg.chat.zalo.me",
+            "https://zalo.me.evil.example",
+            "https://notzalo.me",
+            "https://zaloapp.com.attacker.test",
+            "https://example.com/?next=https://zalo.me",
+            "not a URL",
+        ] {
+            assert!(!is_trusted_zalo_url(url), "expected rejected URL: {url}");
+        }
+    }
+
+    #[test]
+    fn cookie_restore_rejects_untrusted_saved_domain() {
+        let mut session = Session::new(false, false, false).unwrap();
+        session.domains.lp_chat = "https://zalo.me.attacker.test".into();
+        let err = session.validate_session_cookie_hosts().unwrap_err().to_string();
+        assert!(err.contains("untrusted Zalo URL"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_rejects_untrusted_url_before_network_io() {
+        let session = Session::new(false, false, false).unwrap();
+        let err = session
+            .post_multipart(
+                "https://zaloapp.com.attacker.test/upload",
+                "fileContent",
+                "fixture.txt",
+                "text/plain",
+                b"fixture",
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("untrusted Zalo URL"), "{err}");
+    }
+
+    #[test]
     fn session_atomic_save_preserves_saved_format_and_restores_fixture() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1433,11 +1523,24 @@ mod tests {
         let saved: SavedSession = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(saved.computer_name, "fixture-device");
         assert_eq!(saved.session_key.as_deref(), Some("fixture-session-key"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let mut restored = Session::new(false, false, false).unwrap();
         restored.load_from_file(path.to_str().unwrap()).unwrap();
         assert_eq!(restored.computer_name, source.computer_name);
         assert_eq!(restored.secret_key, source.secret_key);
         assert_eq!(restored.session_key, source.session_key);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

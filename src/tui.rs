@@ -160,7 +160,6 @@ enum BgEvent {
     },
     StickerPacks(Vec<StickerPackInfo>),
     StickerItems(Vec<StickerItem>),
-    UpdateAvailable(crate::gui::UpdateCheckResult),
     SendFailed(String),
     ActionFailed(String),
 }
@@ -1504,17 +1503,6 @@ impl<'a> TuiApp<'a> {
                         format!("Bộ nhãn dán: {n} sticker")
                     };
                 }
-                BgEvent::UpdateAvailable(info) => {
-                    self.status = format!(
-                        "🚀 Có bản cập nhật mới v{} trên GitHub (hiện tại: v{}) — chạy --check-update hoặc mở GUI để cập nhật",
-                        info.latest_version, info.current_version
-                    );
-                    crate::updater::notify_os_new_update(
-                        &info.latest_version,
-                        &info.current_version,
-                        &info.release_title,
-                    );
-                }
                 BgEvent::SendFailed(err) => {
                     self.status = format!("Gửi tin nhắn thất bại: {err}");
                 }
@@ -1549,16 +1537,6 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut TuiApp<'_>,
 ) -> Result<()> {
-    {
-        let tx_upd = app.bg_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(info) = crate::gui::check_github_release_cli().await {
-                if info.has_update {
-                    let _ = tx_upd.send(BgEvent::UpdateAvailable(info));
-                }
-            }
-        });
-    }
     let mut last_poll = std::time::Instant::now();
 
     while !app.should_quit {

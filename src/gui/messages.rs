@@ -542,6 +542,10 @@ pub(super) fn finalize_clipboard_rgba_image(
     Some((path, width, height, col_img))
 }
 
+fn macos_clipboard_png_script() -> &'static str {
+    "on run argv\ntry\nset img to the clipboard as «class PNGf»\nset fp to open for access (POSIX file (item 1 of argv)) with write permission\nset eof fp to 0\nwrite img to fp\nclose access fp\nreturn \"ok\"\non error\nreturn \"none\"\nend try\nend run"
+}
+
 /// Read an image from the Windows Clipboard supporting:
 /// 1. Registered `"PNG"` / `"image/png"` streams (Snipping Tool, ShareX, Chrome/Edge, Discord)
 /// 2. `CF_HDROP` (`15`) copied image files from Windows Explorer or ShareX
@@ -692,17 +696,15 @@ pub(super) fn read_clipboard_image_to_png(
     }
     #[cfg(target_os = "macos")]
     {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let tmp = std::env::temp_dir().join(format!("zalo_mac_clip_{now}.png"));
-        let tmp_str = tmp.to_str().unwrap_or("/tmp/zalo_mac_clip.png");
-        let script = format!(
-            "try\nset img to the clipboard as «class PNGf»\nset fp to open for access (POSIX file \"{tmp_str}\") with write permission\nset eof fp to 0\nwrite img to fp\nclose access fp\nreturn \"ok\"\non error\nreturn \"none\"\nend try"
-        );
+        let temp_dir = crate::data_dir::PrivateTempDir::new("ctdozlite-clipboard").ok()?;
+        let tmp = temp_dir.path().join("clipboard.png");
+        crate::data_dir::write_private_file(&tmp, &[]).ok()?;
+        let script = macos_clipboard_png_script();
         if let Ok(out) = std::process::Command::new("osascript")
-            .args(["-e", &script])
+            .arg("-e")
+            .arg(script)
+            .arg("--")
+            .arg(&tmp)
             .output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -1791,27 +1793,6 @@ pub(super) fn render_message_body(
     } else {
         pal.primary
     };
-
-    // Auto-enrich link metadata if title or thumbnail is missing/expired
-    let needs_meta_enrich = msg.link_title.is_none()
-        || msg.link_thumb.is_none()
-        || msg
-            .link_thumb
-            .as_deref()
-            .map(|th| {
-                th.contains("zpcloud.zdn.vn")
-                    && !sticker_textures
-                        .contains_key(&format!("thumb_{}", crate::crypto::md5_hex(th)))
-            })
-            .unwrap_or(false);
-    if needs_meta_enrich {
-        let meta_key = format!("linkmeta_{}", crate::crypto::md5_hex(&url));
-        if loading_stickers.insert(meta_key) {
-            if let Some(tx) = WORKER_TX.get() {
-                let _ = tx.send(WorkerCmd::ParseLinkPreview { url: url.clone() });
-            }
-        }
-    }
 
     // 1. Optional user comment above the link
     if !caption.is_empty() && caption != url {
@@ -3065,6 +3046,13 @@ pub(super) fn render_reactions(
 #[cfg(test)]
 mod quote_navigation_tests {
     use super::*;
+
+    #[test]
+    fn macos_clipboard_script_reads_path_from_argv() {
+        let script = macos_clipboard_png_script();
+        assert!(script.contains("on run argv"));
+        assert!(script.contains("POSIX file (item 1 of argv)"));
+    }
 
     #[test]
     fn quote_navigation_bubble_propagates_action_for_both_directions() {

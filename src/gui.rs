@@ -998,7 +998,6 @@ impl ZaloGuiApp {
             } else {
                 let _ = wtx.send(WorkerCmd::RequestQr);
             }
-            let _ = wtx.send(WorkerCmd::CheckForUpdates { silent: true });
         }
         app
     }

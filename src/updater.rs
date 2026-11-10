@@ -595,79 +595,12 @@ pub fn parse_github_release_value(
     }
 }
 
-/// Dispatch a non-blocking native OS desktop notification announcing a new GitHub release.
-pub fn notify_os_new_update(latest_version: &str, current_version: &str, release_title: &str) {
-    let title = format!("ctdozlite — Có bản cập nhật mới v{latest_version}");
-    let body = if release_title.trim().is_empty() {
-        format!("Phiên bản mới v{latest_version} đã sẵn sàng trên GitHub (hiện tại: v{current_version}). Mở ứng dụng để cập nhật tự động.")
-    } else {
-        format!("{release_title} đã sẵn sàng trên GitHub (hiện tại: v{current_version}). Mở ứng dụng để cập nhật ngay!")
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-        let esc_body = body.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!(
-            "display notification \"{esc_body}\" with title \"{esc_title}\" sound name \"Glass\""
-        );
-        let _ = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("notify-send")
-            .args([
-                "-a",
-                "ctdozlite",
-                "-i",
-                "software-update-available",
-                &title,
-                &body,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let esc_title = title.replace('\'', "''");
-        let esc_body = body.replace('\'', "''");
-        let ps_script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $n = New-Object System.Windows.Forms.NotifyIcon; \
-             $n.Icon = [System.Drawing.SystemIcons]::Information; \
-             $n.BalloonTipTitle = '{esc_title}'; \
-             $n.BalloonTipText = '{esc_body}'; \
-             $n.Visible = $true; \
-             $n.ShowBalloonTip(6000); \
-             Start-Sleep -Seconds 6; \
-             $n.Dispose();"
-        );
-        let _ = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &ps_script,
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
+/// Native update notifications are disabled in personal builds.
+pub fn notify_os_new_update(
+    _latest_version: &str,
+    _current_version: &str,
+    _release_title: &str,
+) {
 }
 
 #[cfg(test)]
