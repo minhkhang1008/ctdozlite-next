@@ -30,9 +30,20 @@ Danh sách đầy đủ: [CHANGELOG](CHANGELOG.md).
 
 ## Cài đặt
 
-**Tải bản dựng sẵn:** vào [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases), tải
+**Cách nhanh nhất (khuyên dùng):** dán vào Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/scripts/install-macos.sh | bash
+```
+
+Script tải bản mới nhất đúng chip (Apple Silicon/Intel), kiểm tra SHA-256, cài vào Applications và mở
+app. Vì tải bằng `curl`, macOS **không** chặn app như khi tải bằng trình duyệt (app chưa được Apple
+công chứng). Chạy lại lệnh này bất cứ lúc nào để cài lại; các bản sau app tự cập nhật.
+
+**Tải `.dmg` thủ công:** vào [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases), tải
 `ctdozlite-<phiên bản>-macos-arm64.dmg` (Apple Silicon) hoặc `-x86_64` (Intel), kéo app vào
-Applications. App chưa được Apple công chứng, nên lần đầu mở hãy chuột phải → **Open**.
+Applications. Lần đầu mở macOS sẽ chặn: chạy `xattr -cr /Applications/ctdozlite.app` hoặc vào
+**System Settings → Privacy & Security → Open Anyway**.
 
 **Tự build:** cần Rust 1.75+, Xcode Command Line Tools và CMake.
 

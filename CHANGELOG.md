@@ -8,6 +8,9 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+### Added (Tính năng mới)
+- **Cài trên macOS không bị Gatekeeper chặn, miễn phí:** `scripts/install-macos.sh` (một lệnh `curl … | bash`) tải bản mới nhất đúng chip, kiểm tra SHA-256, cài vào Applications và gỡ cờ cách ly; kèm mẫu Homebrew Cask (`packaging/homebrew/`) cho tap riêng.
+
 ## [0.2.1] - 2026-11-12
 
 ### Added (Tính năng mới)

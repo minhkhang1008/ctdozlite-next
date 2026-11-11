@@ -752,3 +752,30 @@ Entry template:
   it is the latest.
 - Note: v0.2.0 has no updater, so the owner installs v0.2.1 by hand once. From v0.2.1 on the in-app
   updater handles it (the macOS in-place swap is first exercised by v0.2.2).
+
+## 2026-11-12 — Free way to install on macOS without the Gatekeeper block  (agent: Claude Code, claude-opus-5-5)
+
+- Request: no paid Apple Developer account; find a free way so users do not have to approve the app
+  in Privacy & Security. Owner pasted a reference listing (1) a curl installer, (2) a Homebrew tap
+  with postflight `xattr -cr`, (3) a `.command` fixer inside the DMG.
+- Assessment: (1) works because Gatekeeper only blocks files carrying `com.apple.quarantine`, which
+  browsers add and curl does not. (2) works for a personal tap. (3) is not viable: a `.command` file
+  inside a browser-downloaded DMG is itself quarantined and unsigned, so Gatekeeper blocks it too.
+  CI already ad-hoc signs with `--deep`, which avoids "app is damaged".
+- Changes:
+  - `scripts/install-macos.sh`: finds the latest version via the `/releases/latest` redirect (no
+    API rate limit), or `CTDOZ_VERSION`. Picks the arm64/x86_64 DMG, checks SHA-256 against
+    SHA256SUMS.txt, mounts read-only, quits only an app running from the target path, then
+    `ditto` + `xattr -cr` (sudo only if the dir is not writable) and opens the app.
+    `CTDOZ_APP_DIR` / `CTDOZ_NO_OPEN` exist for testing. Variables are braced before Unicode text:
+    the system bash 3.2 otherwise reads "$APP_DIR…" as a different variable (hit during the test).
+  - `packaging/homebrew/ctdozlite-next.rb`: per-arch cask with the v0.2.1 SHA256s, postflight
+    `xattr -cr`, `auto_updates true`, zap of the data dir. Not published (needs the owner to
+    create `minhkhang1008/homebrew-tap`).
+  - README / CAI_DAT: installer first, explanation of why, manual DMG path
+    (`xattr -cr` / Open Anyway). `release_notes.py` adds the one-liner to future release bodies
+    (in a code block, which the in-app dialog ignores). CHANGELOG [Unreleased].
+- Verification: ran the installer against v0.2.1 into a temp dir with CTDOZ_NO_OPEN. Download and
+  SHA-256 OK, the app was installed with 0 quarantine attributes, codesign verify OK, version
+  0.2.1. `ruby -c` on the cask is OK; brew install is not tested (no tap). The one-liner URL only
+  works once `scripts/install-macos.sh` is on main.

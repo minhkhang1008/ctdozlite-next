@@ -63,7 +63,14 @@ def build(version: str, changelog: str, repo: str) -> str:
         f"Chi tiết: [CHANGELOG.md]({base}/blob/v{version}/CHANGELOG.md) · "
         f"Cài đặt: [docs/CAI_DAT.md]({base}/blob/main/docs/CAI_DAT.md). "
         "macOS: chọn `-macos-arm64.dmg` (Apple Silicon), `-macos-x86_64.dmg` (Intel) "
-        "hoặc `-macos.dmg` (Universal); lần đầu mở hãy chuột phải → Open.",
+        "hoặc `-macos.dmg` (Universal).",
+        "",
+        "**Cài trên macOS không bị chặn** (dán vào Terminal):",
+        "",
+        "```bash",
+        f"curl -fsSL https://raw.githubusercontent.com/{repo or 'minhkhang1008/ctdozlite-next'}"
+        "/main/scripts/install-macos.sh | bash",
+        "```",
     ]
     return "\n".join(out).replace("\n\n\n", "\n\n") + "\n"
 

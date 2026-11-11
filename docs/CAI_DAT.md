@@ -2,6 +2,24 @@
 
 ## Cài bản dựng sẵn (macOS)
 
+**Khuyên dùng — một lệnh, không bị Gatekeeper chặn:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/scripts/install-macos.sh | bash
+```
+
+Script (`scripts/install-macos.sh`) tải bản mới nhất đúng chip, đối chiếu SHA-256 với
+`SHA256SUMS.txt`, chép `ctdozlite.app` vào `/Applications`, gỡ cờ cách ly rồi mở app. Gatekeeper chỉ
+chặn tệp có cờ `com.apple.quarantine` mà trình duyệt gắn vào; `curl` không gắn cờ này. Tuỳ chọn:
+`CTDOZ_VERSION=0.2.1` (cài bản cụ thể), `CTDOZ_APP_DIR=~/Applications`, `CTDOZ_NO_OPEN=1`.
+
+Vì sao không ký "thật": muốn macOS mở app tải bằng trình duyệt mà không hỏi, app phải được ký
+Developer ID **và** công chứng với Apple — cần Apple Developer Program (99 USD/năm). Từ macOS 15, mẹo
+chuột phải → Open cũng không còn tác dụng với app chưa công chứng. Các bản cập nhật tải trong app
+không mang cờ cách ly nên không bị chặn; chỉ lần cài đầu cần cách ở trên.
+
+**Hoặc tải `.dmg` thủ công:**
+
 Tải tại [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases):
 
 | Máy | Tệp |
@@ -11,7 +29,8 @@ Tải tại [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases)
 | Chạy được trên cả hai | `ctdozlite-<phiên bản>-macos.dmg` |
 
 Mở `.dmg`, kéo `ctdozlite.app` vào **Applications**. App chỉ được ký tạm (ad-hoc), chưa được Apple
-công chứng, nên lần đầu mở hãy chuột phải → **Open**, hoặc chạy:
+công chứng, nên lần đầu mở macOS sẽ chặn. Vào **System Settings → Privacy & Security → Open Anyway**,
+hoặc chạy:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/ctdozlite.app
