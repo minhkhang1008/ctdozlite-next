@@ -8,6 +8,8 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-12
+
 ### Added (Tính năng mới)
 - **Tự động cập nhật từ Releases của ctdozlite-next:** Kiểm tra khi mở app và mỗi 30 phút, báo qua Notification Center; trên macOS tải `.dmg`, xác minh SHA-256 và chữ ký, thay app tại chỗ rồi tự mở lại.
 - **Thanh thao tác khi rê chuột vào tin nhắn:** Ba nút Trả lời, Chia sẻ và "…" (menu Copy / Ghim / Đánh dấu / Tuỳ chọn khác / Thu hồi / Xóa chỉ ở phía tôi) như Zalo PC.
@@ -18,13 +20,13 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 - **Xem chi tiết tin nhắn:** Người gửi, thời gian đầy đủ, loại tin, trạng thái gửi, số cảm xúc và mã tin nhắn.
 
 ### Changed (Thay đổi)
-- Đổi tên hiển thị thành **ctdozlite-next** (tiêu đề cửa sổ, thanh tiêu đề, Cài đặt, thông báo, `--version`). Tên tệp chạy, bundle id và thư mục dữ liệu giữ nguyên.
-- Giao diện tối: nền tối hơn, bong bóng tin nhắn màu xám để tách khỏi nền.
-- Menu tin nhắn ghi "Copy link" với tin liên kết.
-- Mở app ở chế độ toàn màn hình (phóng to sau khung hình đầu; đặt ngay lúc tạo cửa sổ làm cửa sổ không viền biến mất trên macOS).
-- Bỏ tab đăng nhập bằng số điện thoại khỏi màn hình đăng nhập.
-- Xoá `.mailmap` (chỉ dùng để gộp danh tính người đóng góp bản gốc trong `git log`).
-- CI: push lên `main` chỉ chạy test (bỏ qua nếu chỉ sửa tài liệu); bộ cài cho mọi nền tảng chỉ được dựng khi có tag `v*` hoặc chạy thủ công.
+- **Đổi tên hiển thị thành ctdozlite-next:** Tiêu đề cửa sổ, thanh tiêu đề, Cài đặt, thông báo và `--version`. Tên tệp chạy, bundle id và thư mục dữ liệu giữ nguyên.
+- **Giao diện tối dễ nhìn hơn:** Nền tối hơn, bong bóng tin nhắn màu xám để tách khỏi nền.
+- **"Copy link" cho tin liên kết:** Menu tin nhắn ghi đúng loại nội dung được sao chép.
+- **Mở app toàn màn hình:** Phóng to sau khung hình đầu (đặt ngay lúc tạo cửa sổ làm cửa sổ không viền biến mất trên macOS).
+- **Bỏ đăng nhập bằng số điện thoại:** Màn hình đăng nhập chỉ còn mã QR (dòng lệnh vẫn có `--phone`/`--pass`).
+- **Dọn repo:** Xoá `.mailmap` (chỉ dùng để gộp danh tính người đóng góp bản gốc trong `git log`).
+- **Phát hành nhanh hơn:** CI chỉ chạy test khi push `main` (bỏ qua nếu chỉ sửa tài liệu); bộ cài chỉ dựng khi có tag `v*`. Ghi chú phát hành lấy từ CHANGELOG nên hộp thoại cập nhật hiện danh sách thay đổi.
 
 ### Fixed (Sửa lỗi)
 - **Giao diện sáng:** Chữ, huy hiệu phiên bản và nút cửa sổ trên thanh tiêu đề xanh nay màu trắng (trước đây cùng màu nền nên không đọc được); khung "Tổng số tin nhắn / Mã định danh" không còn nền xanh.
