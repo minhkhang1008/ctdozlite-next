@@ -59,6 +59,10 @@ qr.png
 Zalo_app_icon_redesign_*.jpg
 call_relay.json
 call_trace.log
+# Owner marker of the live history DB (contains the account UIN)
+active_account
+# Large captured web-client chunks; referenced by URL in re-notes instead
+web-bundle/lazy-*.js
 
 # Generated graph/tooling output
 graphify-out/
@@ -66,9 +70,10 @@ graphify-out/
 book/
 
 # Local agent tooling & skill kit (machine-specific, symlinked paths)
+# `.agents/WORKLOG.md` is tracked on purpose (see AGENTS.md); the skill kits are not.
 .claude/
+.agents/skills/
 .omp/
-.agents/
 .opencode/
 .engineered-config.json
 .scratch/

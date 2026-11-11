@@ -2,6 +2,11 @@
 
 Operating guide for AI agents and humans working in this repository.
 
+> **AGENT SIGNAL — READ FIRST:** Before doing anything, read the latest entries in
+> [`.agents/WORKLOG.md`](.agents/WORKLOG.md) to learn the current context (recent fixes, root
+> causes, what is and isn't verified). After finishing **any** task, append an entry there using
+> the template at the top of that file. This is required by the repository owner.
+
 ## Project
 
 `ctdozlite` (`zalo-rust`) is a native Zalo desktop client written in Rust: `egui` GUI, `ratatui` TUI, a Tokio worker for network I/O, and a local SQLite message store. No Node.js, no Electron, no Chromium.
@@ -67,3 +72,25 @@ MUST read the corresponding standard file under `docs/standards/` before modifyi
 - **Tests, fixtures, and benchmarks** → `docs/standards/testing-and-fixtures.md`
 - **Secrets, crypto, and session handling** → `docs/standards/security-and-cryptography.md`
 - **Branches, commits, and PRs** → `docs/standards/git-flow-and-pr-matrix.md`
+
+---
+
+# Hướng dẫn dành cho Codex Agent (Bản cá nhân ctdozlite trên macOS)
+
+## 1. Nguyên tắc bảo mật bất khả xâm phạm (ĐÃ VÁ - TUYỆT ĐỐI KHÔNG GỠ BỎ)
+1. **Không Auto-Updater & Không REST/MCP:** Tính năng tự động cập nhật (`updater.rs`, `worker.rs`) và REST/MCP server (`api_mcp.rs`) đã bị vô hiệu hóa chủ đích. Không bao giờ kích hoạt lại hoặc thêm kết nối tới GitHub API.
+2. **Domain Allowlist bắt buộc:** Mọi kết nối gửi kèm `zpw_sek`, `zpw_uin` hoặc session cookie (HTTP, WebSocket, History Sync, Multipart Upload) đều phải đi qua hàm kiểm tra `is_trusted_zalo_url` (`*.zalo.me`, `*.zaloapp.com`, `*.zadn.vn`, `*.zdn.vn`).
+3. **Quyền riêng tư mạng:** Không tự động gửi HTTP GET tới các URL của tin nhắn đến để tạo Link Preview.
+4. **Quyền file & Bộ nhớ:** Mọi file nhạy cảm (`session.json`, `zalo_history.db`, file DB tạm khi giải mã) trên macOS/Unix phải giữ quyền `0o600` (thư mục `0o700`). Luồng giải nén trong `history_sync.rs` phải giữ nguyên trần dung lượng RAM.
+
+## 2. Bản đồ kiến trúc để khoanh vùng khi sửa lỗi
+- `src/gui/` (`mod.rs`, `workspace.rs`, `messages.rs`, `modals.rs`, `worker.rs`): Toàn bộ giao diện `egui`, xử lý sự kiện UI, hiển thị tin nhắn, bộ gõ, clipboard và luồng worker nền.
+- `src/chat.rs` & `src/socket.rs`: Luồng WebSocket (`zpw_ws`), HTTP polling, giải mã tin nhắn đến, gửi tin nhắn, reaction, quote, sticker, trạng thái đã đọc.
+- `src/store.rs`: Lưu trữ SQLite (`zalo_history.db`), truy vấn lịch sử, tìm kiếm tin nhắn, cache hội thoại (`threads_cache.json`).
+- `src/history_sync.rs`: Đồng bộ và giải mã lịch sử từ `.db.crypt` (Android) và Sync V2 (iOS).
+- `src/call.rs`, `src/media.rs`, `src/audio.rs`: Gọi thoại/video, xử lý thiết bị âm thanh (`cpal`/`opus`) và giải mã video (`ffmpeg`).
+
+## 3. Quy tắc viết code khi sửa lỗi
+- Không dùng `.unwrap()` hoặc `.expect()` trên dữ liệu từ mạng, JSON hoặc SQLite.
+- Không chạy tác vụ I/O, SQLite nặng hoặc request mạng trực tiếp trên luồng vẽ UI (`egui` frame update); luôn đẩy qua `worker.rs`.
+- Sau mỗi lần sửa, chỉ chạy `cargo check --message-format=short` hoặc `cargo test` trên module liên quan để xác nhận nhanh.

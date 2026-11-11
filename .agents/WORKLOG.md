@@ -1,0 +1,547 @@
+# Agent Work Log
+
+Shared, append-only log for every AI agent (Claude, Codex, ...) working in this repo.
+**Read the latest entries before starting. Append a new entry after every task.**
+Newest entry at the bottom. Keep entries short and factual.
+
+Entry template:
+
+```
+## YYYY-MM-DD — <short title>  (agent: <name/model>)
+- Request: what the user asked
+- Context / root cause: what was found (with evidence)
+- Changes: files + what changed
+- Verification: what was run and the result; what is NOT verified
+- Status: done / partial / blocked — and any open follow-ups
+```
+
+---
+
+## 2026-11-11 — Conversation sidebar (danh sách hội thoại) cannot be resized  (agent: Claude Code, claude-opus-5-5)
+
+- Request: Sidebar still could not be resized after an earlier agent's fix, when running
+  `cargo run --release -- --gui --dev --data-dir ~/.ctdozlite-personal`.
+- Earlier attempt (uncommitted on `personal-hardened`): added `conversation_sidebar_width` state,
+  fixed `width_range` to 200..=520, `ui.set_width(ui.available_width())` in the panel, and removed
+  the tab counter / "Đã ghim (n)" label so the header could not force the panel wider. That did not
+  address the real cause.
+- Root cause: egui 0.29.1 `SidePanel` stores the *content* rect as its width every frame
+  (`PanelState { rect }`, egui `containers/panel.rs`). In `src/gui/workspace.rs` the thread-list
+  row width was measured **outside** the `ScrollArea` as `available_width() - 8`, but the app uses
+  `ScrollStyle::solid()` (`src/gui/theme.rs`: bar_width 6 + inner margin 4 = 10px reserved). Rows
+  were therefore 2px wider than the viewport; a vertical-only `ScrollArea` with
+  `auto_shrink([false,false])` grows to fit, so the panel re-stored a width +2px larger on every
+  repaint. After a drag, the sidebar crept back toward the 520px max, so resizing looked broken.
+- Evidence: headless egui 0.29.1 repro (scratchpad, not in repo) — with the old measurement the
+  stored width went 280 → 287 with no input and drifted 242 → 254 after a drag to 240; with the
+  fix it stays at 280 and holds at 240 after the drag.
+- Changes: `src/gui/workspace.rs` — `row_target_w` is now computed inside the
+  `threads_list_scroll` `ScrollArea` closure (used by thread rows and message-search hit rows).
+- Verification: `cargo check` passes. Headless repro confirms the behaviour. NOT yet verified by
+  the user in the real GUI.
+- Status: done, pending user test. Rule for future edits: inside a resizable `SidePanel`, never
+  allocate widgets wider than the space measured in their own `ui` (especially inside a solid
+  `ScrollArea`), or the panel will fight manual resizing.
+
+## 2026-11-11 — Replace self-drawn new-message popup with native macOS notifications  (agent: Claude Code, claude-opus-5-5)
+
+- Request: Disable the self-drawn in-app new-message notification; send every new incoming message
+  as a native macOS notification (title = sender / group, body = preview) via
+  `src/native_notifications.rs`; DailyNotifier helper in `.app`, `osascript` fallback when the helper
+  binary is missing (e.g. `cargo run`), text passed safely; no notification for outgoing messages;
+  request permission at startup.
+- Context found:
+  - The "toast" for new messages was `incoming_popup` (`IncomingPopupState`), a separate egui
+    corner viewport with quick-reply, drawn in `render_toast_overlay` (`src/gui/modals.rs`).
+    `show_toast` / `toast_notice` is a different thing: short action feedback ("Đã tải thêm…",
+    "Đã gửi tự động…"). **It was kept on purpose**: it isn't a message notification, and sending it
+    to the OS would flood Notification Center.
+  - `native_notifications.rs` previously did authorization only (no delivery). `DailyNotifier.swift`
+    `--notify` existed but only accepted the generic payload `"Zalo"/"You have a new message."`
+    (privacy design). It now accepts sender/preview text because the owner asked for it.
+- Changes:
+  - `src/native_notifications.rs`: new `pub async fn notify(title, body)`. It flattens control
+    characters, caps title at 120 / body at 240 chars, and falls back to "ctdozlite" / "Tin nhắn mới"
+    when empty. If the helper binary exists → `--notify` with JSON on stdin (opaque random sha256 id,
+    `sound:false` because the GUI plays its own chime); `notAuthorized` → `NotificationError::NotAuthorized`,
+    no osascript bypass. Else → `/usr/bin/osascript -e 'on run argv' -e 'display notification (item 2 of argv)
+    with title (item 1 of argv)' -e 'end run' -- <title> <body>`, so the text is argv, never code.
+    The spawn/collect helpers were refactored to support stdin. Five new tests were added.
+  - `src/gui/worker.rs`: `WorkerCmd::PostNativeNotification { title, body }`. Delivery is
+    fire-and-forget on tokio; failures go to `logger::log_error` (dev mode only, variant name only).
+  - `src/gui.rs`: where the popup used to be created (incoming, not muted, not outgoing, and thread ≠ active or
+    window unfocused), it now sends `PostNativeNotification` if `settings.enable_notifications`.
+    `IncomingPopupState` and the `incoming_popup` field were removed. A one-shot
+    `request_notification_permission_at_startup()` (macOS only) sends `RequestNotificationAuthorization`
+    on the first frame after the worker is up.
+  - `src/gui/modals.rs`: the corner popup viewport and `get_desktop_bottom_right_pos` were removed from
+    `render_toast_overlay` (only the action-feedback toast remains). The Settings note text was updated.
+  - `native/macos/DailyNotifier.swift`: `Payload.validate()` now accepts non-empty single-line text
+    (title ≤120, body ≤240 graphemes; rejects Unicode `Cc` control chars, allows emoji ZWJ) plus the
+    64-hex id. The self-test was updated.
+- Verification: `cargo check --message-format=short` OK; `cargo test --lib` 247 passed / 0 failed.
+  The helper was rebuilt into the scratchpad (not `native/macos/build`) and `--self-test` PASSES. NOT verified:
+  real notification delivery/permission prompt in the GUI (osascript path under `cargo run`, and the
+  helper path inside a packaged `.app`); the user must test.
+- Status: done, pending user GUI test. Follow-ups / caveats:
+  - Under `cargo run`, notifications come from `osascript` (attributed to Script Editor); macOS may
+    need Script Editor allowed in System Settings › Notifications. The startup permission request
+    returns `HelperUnavailable` in that mode (no helper) — expected.
+  - Brand-new threads (first message from a contact not yet in the list) still do not notify,
+    same as the old popup did.
+  - Removing the popup also removed its quick-reply box.
+  - Packaged builds must rebuild DailyNotifier (`native/macos/build-native-helpers.sh`) to pick up the
+    relaxed validation; an old helper will reject the payload (exit 2 → `InvalidResponse`).
+  - `cargo fmt --check` still reports pre-existing diffs in untouched code (build.rs, call_probe.rs,
+    gui.rs, modals.rs); I didn't change them.
+
+## 2026-11-11 — Message bubble alignment, bare-URL links, link-share copy, large emoji  (agent: Claude Code, claude-opus-5-5)
+
+- Request: (1) align incoming bubbles without avatar; (2) blue, hover-underlined, clickable URL when
+  there is no preview; (3) "Copy tin nhắn" copies the original URL for link shares; (4) emoji-only
+  messages rendered large / in colour.
+- Root causes:
+  1. In egui 0.29, `allocate_exact_size` (avatar) adds `item_spacing.x` after the widget, but
+     `add_space(30.0)` does not. Follow-up bubbles therefore sat `item_spacing.x` further left.
+  2. Every message containing `http(s)://` becomes a link card. When there was no thumb/title/desc,
+     the card drew the URL as a bold title in normal text colour.
+  3. The context menu copied `msg.text`, which for attached link shares holds title/desc preview text.
+  4. egui ships only a monochrome emoji font. The app bundles only the 6 reaction PNGs (`assets/emojis`).
+- Changes (`src/gui/messages.rs` only):
+  - Placeholder is now `add_space(30.0 + item_spacing.x)`.
+  - Link card: if it has no thumb, title (≠url/domain) or desc, it renders the URL as a label in
+    `url_link_color` (#388BFD dark / #1E88E5 light). The label underlines on hover (hover state kept in
+    egui temp data, one frame behind), opens the URL on click, and drops the domain line.
+  - `render_markdown_inline_rich`: bare URLs (`http(s)://`, `www.`, `docs.google.com/`,
+    `drive.google.com/` at a word boundary) are blue, underlined on hover and clickable. Scheme-less
+    URLs get `https://`.
+  - New `message_copy_text`: for messages with `link_url` (not photo/file/sticker) it copies the
+    URL, or "comment\nurl". Otherwise it copies `msg.text` unchanged.
+  - New `emoji_only_clusters` (ZWJ, skin-tone, VS16, flag aware, ≤8 clusters) and `render_emoji_only`
+    at 36px. It uses the bundled colour PNG when the emoji is one of the 6 reactions, else the glyph.
+    The width pre-measure mirrors this. `render_message_body` gained an `emoji_textures` param.
+  - 3 new unit tests.
+- Verification: `cargo check --message-format=short` clean; `cargo test --lib` 250 passed / 0 failed.
+  NOT verified in the real GUI.
+- Caveats:
+  - Emoji other than the 6 reactions (e.g. 🐧) are still monochrome glyphs (now 36px). Full colour
+    needs a colour emoji atlas (e.g. Twemoji PNGs) or CoreText rasterisation, which isn't done.
+  - **Mistake:** I ran `cargo fmt -- src/gui/messages.rs`, which formats the WHOLE crate. Files that were
+    clean before the task now carry formatting-only diffs. My attempt to `git checkout` them was blocked
+    by the permission classifier; the owner should decide. Files that were already dirty
+    (gui.rs, modals.rs, theme.rs, worker.rs, workspace.rs, store.rs, api_mcp.rs,
+    native_notifications.rs, zproto_host.rs) were also reformatted on top of the owner's
+    uncommitted edits. The changes are semantically neutral, but they make diffs noisy.
+    Use `rustfmt --edition 2021 <file>` for single-file formatting.
+
+## 2026-11-11 — Colour emoji from the system font (follow-up)  (agent: Claude Code, claude-opus-5-5)
+
+- Request: finish colour emoji (e.g. 🐧, 💌); owner asked why emoji can't render as plain text.
+- Why text can't do it: egui/epaint 0.29 rasterises glyphs via ab_glyph into a single-channel
+  coverage atlas tinted by the text colour. Colour glyph tables (Apple `sbix`, Noto `CBDT`,
+  Windows `COLR`) are never read. So egui text can only show monochrome emoji; colour emoji must
+  be drawn as textures.
+- Changes:
+  - Deps: `rustybuzz 0.20` (shaping, shares the existing `ttf-parser 0.25`) and `memmap2 0.9`
+    (already in the lock tree).
+  - New `src/emoji_raster.rs`: memory-maps `/System/Library/Fonts/Apple Color Emoji.ttc`
+    (Linux Noto paths as fallback; Windows unsupported → None). It shapes the cluster with
+    rustybuzz so ZWJ sequences, flags and skin tones resolve to the combined glyph, takes the
+    PNG strike via `glyph_raster_image(gid, 96)`, pads it to a square and caps it at 160px.
+    No network and no bundled assets. Unsafe `Mmap::map` has a SAFETY note.
+  - `WorkerCmd::RasterizeEmoji { key, cluster }` runs on `spawn_blocking` (INV-3) and replies with
+    the existing `StickerImageReady` / `StickerImageFailed` events. Textures live in
+    `sticker_textures` under `emoji_<hex codepoints>`. In `gui.rs`, a failed `emoji_` key stays in
+    `loading_stickers` as a negative cache, so it is not re-requested every frame.
+  - `messages.rs`: new `scan_emoji_clusters` (byte ranges); `emoji_only_clusters` is rebuilt on it.
+    Emoji-only messages use system texture → bundled reaction PNG → glyph, at 36px.
+    For inline text, `render_markdown_inline_rich` / `render_chat_markdown_block` now take
+    `textures` + `loading`. `split_emoji_sections` turns each ready emoji into a transparent
+    placeholder section (first codepoint only). The galley is laid out manually and
+    `paint_emoji_marks` overdraws the texture at each placeholder glyph. Only Emoji_Presentation
+    / ≥U+1F000 / VS16 clusters are converted, so `©`, `→`, `✓` stay text.
+  - Tests: 4 in `emoji_raster` (real font: 🐧 💌 ❤️ 👍🏽 🇻🇳 👨‍👩‍👧, combined ≠ component) and 1 for
+    section splitting.
+- Verification: `cargo check` clean; `cargo test --lib` 255 passed / 0 failed. NOT verified visually
+  in the GUI.
+- Caveats: the first frame shows the monochrome glyph until the texture arrives. Selecting and copying
+  label text yields only the first codepoint of a ZWJ sequence (the "Copy tin nhắn" menu still copies
+  the full `msg.text`). Thread list previews, composer, quote snippets and reactions still use glyphs.
+  Formatting this time used `rustfmt` on the touched files only.
+
+## 2026-11-11 — @mention popover regressions + real group tagging  (agent: Claude Code, claude-opus-5-5)
+
+- Request: (1) the @ features stopped working (seen with `--release --gui --dev --data-dir
+  ~/.ctdozlite-personal`); (2) picking a member only inserted plain text, with no real tag.
+- Root causes found (in code; NOT reproduced in the live GUI, no runtime logs available):
+  - `extract_active_mention_query` stopped suggesting at more than 3 words, so typing a full
+    Vietnamese name ("@Nguyễn Hoàng Hải Đăng", 4 words) closed the popover mid-name.
+  - `GroupMembersLoaded` with an empty list (failed `getmg-v2`/`group/members`) was cached in
+    `group_members_map` forever and never refetched. The popover then offered only "@All".
+  - No send path ever carried `mentionInfo` (always `""` / `"[]"` / absent) → tags impossible.
+  - `suggest_mentions` is `true` in the owner's `app_settings.json`, so settings were not the cause.
+- Changes:
+  - `chat.rs`: `MentionPick`, `build_mention_info` (UTF-16 pos/len incl. `@`, type 1 for `-1`,
+    longest-name-first, word boundary, drops picks no longer in text), and
+    `send_group_mention_message_with_client_id` → `/api/group/mention`. On a non-expiry error it
+    falls back to `sendmsg`. Evidence and caveats are in `re-notes/38_group_mentions.md`
+    (zca-js shape + our incoming `mentions` parser; NO capture).
+  - `worker.rs`: `WorkerCmd::SendMessage` gained `mentions`. Group texts with tags skip
+    `sendlink` and go through the mention sender. Callers in `modals.rs` pass `Vec::new()`.
+  - `workspace.rs`: query limit raised to 6 words (`MENTION_QUERY_MAX_WORDS`).
+    `mention_name_matches` helper added. An empty member list re-fetches every 20 s at most
+    (`mention_member_retry_at`). Fallback candidates come from incoming senders' `uidFrom`
+    (`mention_fallback_from_messages`). `insert_composer_mention` records the pick, sets the
+    caret at the end, and dismisses the "Name " query so Enter sends instead of re-inserting.
+    Picks are sent via `composer_mentions` and cleared when the draft is empty. The popover now
+    returns `MentionCandidate`.
+  - `gui.rs`: two new state fields.
+  - Tests: 2 in `chat.rs`, 2 in `workspace.rs`.
+- Verification: `cargo check` clean; `cargo test --lib` 259 passed / 0 failed. NOT verified: live
+  send to Zalo (endpoint and response unconfirmed), popover behaviour in the GUI, and whether the
+  owner's group member fetch actually fails at runtime.
+- Formatting: `rustfmt` on touched leaf files only (chat.rs, workspace.rs, worker.rs, modals.rs,
+  messages.rs). The crate-wide `cargo fmt` churn from earlier today is still in the tree.
+
+## 2026-11-11 — Blue @tag text + @ popover keyboard navigation  (agent: Claude Code, claude-opus-5-5)
+
+- Request: (1) render @tags blue in group messages (incoming and outgoing), using `mentions`
+  metadata and falling back to text parsing; (2) ↑/↓/Tab/Enter navigation in the @ popover:
+  Enter/Tab pick without sending or moving focus, clear highlight, caret after the name.
+  (Owner confirmed group tag sending via `/api/group/mention` works → re-notes/38 evidence.)
+- Root causes:
+  - `render_markdown_inline_rich` only checked `@` when it sat exactly at the start of `rest`.
+    `@` was not one of the "next marker" positions, so mid-text `@Name` was bulk-appended as
+    plain text.
+  - Popover keys were read AFTER the TextEdit had run: ↑/↓ moved the caret, and Tab moved focus
+    (egui `Focus::begin_pass` reads Tab from raw input at frame start; TextEdit's filter has
+    `tab: false`). Escape clears focus at frame start, so the old focus-gated Esc check failed.
+- Changes:
+  - `messages.rs`: `message_mention_texts` maps wire `mentions` / archive `meta.mentionsList`
+    UTF-16 `pos/len` onto `msg.text` → exact `@Name` strings. It returns `Some(empty)` when the
+    message is known to have no tags, and `None` → heuristic when entries are unmappable.
+    `find_mention_start` (word-boundary `@`) was added to the marker scan. Metadata spans match
+    longest-first. The old `@All`/`@Name` guess runs only without metadata. Style:
+    `mention_link_color` (#0068FF light / #4DA3FF dark), no chip background or underline. The
+    renderers gained a `mentions: Option<&[String]>` param.
+  - `GuiEvent::MessageSent` gained `mentions`. The SendMessage worker path fills it with
+    `build_mention_info`, and gui.rs stores it in the local outgoing message's
+    `wire_ref.fields["mentions"]` so our own bubble highlights exactly. Other emitters
+    (worker ×3, call.rs ×5) pass `Vec::new()`.
+  - `workspace.rs`: keys are consumed before the TextEdit with `consume_key` (↓/↑ clamp,
+    Tab/Enter pick, Enter's `\n` text event dropped). The TextEdits use
+    `.lock_focus(popover open)` so Tab doesn't leave. Esc is handled without a focus gate and
+    restores focus. Selection resets to 0 when the query changes (`mention_last_query`). The
+    selected row gets a primary tint plus a left accent bar, and is scrolled into view.
+  - Tests: +2 in messages.rs.
+- Verification: `cargo check --message-format=short` clean; `cargo test --lib` 261 passed /
+  0 failed. NOT verified in the live GUI. Caveat: if `group/mention` falls back to `sendmsg`, our
+  local bubble still shows blue tags even though recipients get plain text.
+
+## 2026-11-11 — Redesign GUI to match Zalo PC (chat.zalo.me) look  (agent: Claude Code, claude-opus-5-5)
+
+- Request: inspect chat.zalo.me with BrowserSkill (owner's logged-in account, permission given to
+  open chats) and make ctdozlite look like it.
+- Evidence gathered (scratchpad only, nothing committed): computed CSS custom properties for dark
+  mode, the `:root .light` token block from Zalo's public stylesheet, and DOM measurements of nav
+  rail, conversation rows, header, bubbles and composer. Only colour values and metrics were reused;
+  no Zalo CSS, icons, fonts or images were copied. The Lucide icon set was kept.
+- Changes:
+  - `theme.rs`: dark/light palettes replaced with Zalo tokens (dark: rail #121416, panels #22262B,
+    in-bubble #282D33, out-bubble/selected #1F344D, text #DFE2E7/#9FACBC, accent #0068FF/#66A6FF;
+    light: blue rail #005AE0, white panels, canvas #E5E7EB, out-bubble/selected #E5F1FF, text
+    #081B3A/#5A6981). New tokens `nav_icon`, `nav_icon_active`, `nav_selected_bg`, `nav_hover_bg`
+    (the first two can be overridden in theme.json). Widget rounding 8 → 6.
+  - `workspace.rs`: nav rail 64px wide with 48px tiles, 6px corners, tinted selection tile (pill
+    removed); sidebar search is a borderless 32px well with 5px corners and "Tìm kiếm" hint; tabs
+    14px; conversation rows 70px card in a 78px slot, 48px avatar, 16/14/12px text, no left bar, no
+    group icon prefix; chat header 68px with 48px avatar and 18px title; composer input 15px.
+  - `messages.rs`: bubbles borderless with a 1px soft shadow (`bubble_shadow`), 6px corners, 12px
+    padding, 15px body text, 12px time, 13px secondary-colour sender name, 40px incoming avatar.
+  - `gui.rs`: default sidebar width 280 → 344.
+- Verification: `cargo check` clean; `cargo test --lib` 261 passed / 0 failed. rustfmt run on the
+  three touched gui files only. NOT verified visually in the running GUI (not launched).
+- Status: done, pending the owner's visual check. Not done: Zalo's right-hand group info panel
+  layout, the pinned-message bar and the separate "Đã nhận" status pill under the last bubble.
+  Text truncation still uses character counts, so very wide glyphs may need tuning after the
+  larger fonts.
+
+## 2026-11-11 — Blue @tags inside the composer + first-use @ popover keys dead  (agent: Claude Code, claude-opus-5-5)
+
+- Request: (1) picked @tags in the composer should be blue like in sent bubbles (they were white);
+  (2) the first @ pick in a session only worked with the mouse; keyboard worked afterwards.
+- Root cause (2), from code (not reproduced live): `gui.rs` IME pre-pass set `ime_active = true`
+  on `ImeEvent::Enabled`, which macOS/winit sends when a TextEdit gains focus. Enabled has no
+  preedit, so the flag stayed true until the first IME commit. While it was true, `is_ime_busy`
+  skipped the popover's ↑/↓/Tab/Enter handling and the pre-pass stripped every Enter key. After
+  the first commit (e.g. after a mouse pick) the flag cleared, which matches "works from the
+  second time".
+- Changes:
+  - `gui.rs`: `ImeEvent::Enabled` no longer marks composing; only a non-empty Preedit does.
+  - `workspace.rs`: `composer_mention_spans` (longest-first, word boundary, no overlap) and
+    `composer_mention_layout_job`; both composer TextEdits use a `.layouter` that paints
+    `composer_mentions` names in `mention_link_color`. `COMPOSER_FONT_SIZE` = 15. +1 test.
+  - `messages.rs`: `mention_link_color` made `pub(super)`.
+- Verification: `cargo check` clean; `cargo test --lib` 262 passed / 0 failed. NOT verified in the
+  live GUI (Telex IME behaviour in particular). If keys still fail while a Telex preedit is open,
+  that is intended: Enter then commits the IME text first.
+
+## 2026-11-11 — Paste images from the clipboard on macOS (Cmd+V)  (agent: Claude Code, claude-opus-5-5)
+
+- Request: allow pasting images straight from the clipboard. Upstream only had it working on Windows.
+- Root cause: egui-winit 0.29.1 `on_keyboard_input` swallows `Cmd+V` (`is_paste_command`) and
+  pushes `Event::Paste` only when the clipboard has non-empty text. With an image-only clipboard
+  egui saw no input at all, so `is_clipboard_paste_triggered` never fired on macOS; the old
+  osascript `«class PNGf»` reader was never reached. That reader also missed TIFF-only images and
+  would have pasted the file *icon* for files copied in Finder.
+- Changes:
+  - `Cargo.toml`: macOS-only deps `objc2 0.5`, `block2 0.5`, `objc2-foundation 0.2`,
+    `objc2-app-kit 0.2`. These are the same versions winit already pulls in, so no new crates
+    (Cargo.lock only gained dependency-list entries).
+  - New `src/gui/macos_clipboard.rs`: a local `NSEvent` key-down monitor (no Accessibility or
+    Input Monitoring permission needed) records `Cmd+V` (no Ctrl/Option, not a repeat) with a
+    timestamp and requests a repaint. `take_cmd_v()` consumes it once, with a 1.5 s staleness
+    window. `read_image()` reads NSPasteboard in-process: (1) Finder file URLs with image
+    extensions, ≤64 MB, never the icon TIFF; (2) `public.png`; (3) `public.tiff`. Formats the
+    `image` crate can't decode (TIFF/HEIC/BMP/WebP) are re-encoded to PNG through
+    `NSBitmapImageRep`. 2 unit tests.
+  - `src/gui/messages.rs`: on macOS, `is_clipboard_paste_triggered` installs the monitor (once)
+    and ORs in `take_cmd_v()`. The macOS branch of `read_clipboard_image_to_png` now calls
+    `macos_clipboard::read_image()`. The osascript script and its test were removed, so there is
+    no longer a subprocess on every text paste.
+  - `src/gui.rs`: `#[cfg(target_os = "macos")] mod macos_clipboard;`.
+- Verification: `cargo check` clean; clippy shows no warnings in the touched code;
+  `cargo test --lib` 263 passed. A temporary live test (removed afterwards) put a PNG, a TIFF and
+  a Finder file copy on the real pasteboard: all decoded to 37×21. A text-only clipboard returned
+  None. NOT verified: the Cmd+V key monitor in the running GUI (needs a manual try in a chat).
+- Status: done, pending the owner's GUI test. UI hint strings still say "Ctrl+V".
+
+## 2026-11-11 — Zalo-style "who reacted" tooltip and dialog  (agent: Claude Code, claude-opus-5-5)
+
+- Request: rework the UI/UX for viewing who reacted. The owner sent two Zalo PC screenshots as
+  references: a blue hover tooltip naming the reactor ("Trí"), and a "Biểu cảm" modal with emoji
+  tabs on the left and reactors on the right.
+- Before: hovering the pill showed only emoji + counts. Clicking opened an `egui::Window`
+  "Cảm xúc" (340×380) with horizontal tab buttons.
+- Changes:
+  - `messages.rs`: `render_chat_bubble` / `render_reactions` take
+    `reactor_name: &dyn Fn(&str) -> String`. New `reaction_tooltip_lines` builds the tooltip text
+    from the ledger only (`reactor_ids`, deduplicated, most-used emoji first, max 8 names, then
+    "và N người khác", which also absorbs unexplained counts). With no ledger it shows
+    "N lượt thả cảm xúc". New `paint_reaction_tooltip` paints the solid blue card (#1A3F94 dark /
+    #0052CC light), 14px white text and a down arrow centred on the pill, clamped to the screen,
+    on the Tooltip layer. +2 tests.
+  - `workspace.rs`: the caller builds the resolver from the existing per-frame
+    `member_name_by_uid`, mapping self to "Bạn" and a 1:1 peer to `thread_name`.
+  - `reactions_dialog.rs`: rewritten as a modal: dimmed backdrop (click outside or Esc closes) and
+    a 440×350 card (clamped to the window) with a 52px header "Biểu cảm" + X button and a divider.
+    The 120px left column has 36px tab rows ("Tất cả N", then emoji N), the selected one tinted.
+    The right column scrolls 56px rows: 40px avatar, ellipsized 15px name, and emoji + count
+    right-aligned. Data and row-building logic are unchanged.
+- Verification: `cargo check` clean; clippy reports nothing new in the touched code (one existing
+  `sort_by` lint at reactions_dialog.rs:108 remains); `cargo test --lib` 265 passed. rustfmt was
+  run on reactions_dialog.rs and messages.rs only. NOT verified visually in the running GUI.
+- Status: done, pending the owner's visual check.
+
+## 2026-11-11 — Double-click to reply with an auto @tag; Esc leaves reply mode  (agent: Claude Code, claude-opus-5-5)
+
+- Request: double-clicking a message enters reply mode and tags the sender at the start of the
+  composer as a visible `@Name` the user can delete. Esc exits reply mode.
+- Context: double-click → `BubbleAction::Reply` already existed, but it only set `replying_to`.
+  There was no Esc handling for reply mode. `SendQuote` sent no tags at all
+  (re-notes/38 "Not covered").
+- Changes:
+  - `workspace.rs`:
+    - `reply_mention_for` resolves the sender uid from `sidebar_sender_id`, a numeric `sender`,
+      or a unique member-name match. The name comes from `member_name_by_uid`. It never tags
+      us. +1 test.
+    - `start_reply` drops any previous auto tag and prefixes `@Name ` (only in groups and only
+      for others' messages). The tag is added to `composer_mentions`, so it renders blue and is
+      sent as a real tag. It also dismisses the @ popover for that query and puts the caret at
+      the end.
+    - `cancel_reply` / `remove_reply_auto_mention` strip the auto tag only if it is still
+      untouched at the start.
+    - Used by: double-click/menu Reply, the banner X, thread switch, and Esc. Esc is consumed
+      after the @ popover's Esc and skipped while IME is composing or any modal is open
+      (image viewer, reactions, forward, settings, schedule, phone lookup, profile menu).
+    - Sending clears `reply_auto_mention` and passes `composer_mentions` to `SendQuote`.
+  - `gui.rs`: `reply_auto_mention` state. `QuoteSent` carries `mentions` and stores them in
+    `wire_ref.fields["mentions"]` so our own reply bubble highlights the tag.
+  - `worker.rs`: `SendQuote { mentions }` calls the new `chat::send_quote_message_with_mentions`.
+  - `chat.rs`: `send_quote_message_with_mentions`; `send_quote_message_with_client_id` delegates
+    with `&[]`, so the TUI and old callers are unchanged. A group quote adds `mentionInfo` only
+    when tags resolve. The group fallback now goes through
+    `send_group_mention_message_with_client_id`, which equals plain sendmsg when there are no tags.
+  - `re-notes/38_group_mentions.md`: documents quote + mentionInfo (zca-js evidence, NOT
+    capture-verified) and the manual check.
+- Verification: `cargo check` clean; `cargo test --lib` 266 passed; clippy reports nothing new
+  in the touched code. NOT verified live: the GUI behaviour, or whether Zalo honours
+  `mentionInfo` on `group/quote`.
+- Status: done, pending the owner's live test (see the re-notes/38 manual check).
+
+## 2026-11-11 — Drag & drop files: "Gửi nhanh" vs "Xem trước khi gửi" zones  (agent: Claude Code, claude-opus-5-5)
+
+- Request (with a Zalo web screenshot as reference): while dragging a file over the app, show
+  two clearly drawn drop zones and highlight the one under the cursor. Dropping on the message
+  area sends immediately; dropping on the composer attaches the file to the draft for review.
+- Before: any drop anywhere sent every file at once (handler inside the composer frame), with
+  no hover UI.
+- Key finding: during an AppKit drag session the window receives no mouse-move events, and
+  winit 0.30 only forwards `HoveredFile` with no position, so egui's pointer stays frozen. New
+  `src/gui/macos_drag.rs::cursor_in_window` reads `NSEvent.mouseLocation` and maps it into
+  egui points: it flips the y axis using the primary `NSScreen` height, subtracts the
+  viewport's `inner_rect`, and corrects for egui zoom (`pixels_per_point / native`). Other
+  OSes use `pointer.latest_pos()`. Cargo features added: foundation `NSGeometry`, app-kit
+  `NSScreen` (same crate versions).
+- Changes (`workspace.rs`, `gui.rs`):
+  - After the composer, a `4b` block: while `hovered_files` is non-empty,
+    `drop_zone_rects(messages inner_rect, composer rect)` gives the quick zone over the message
+    area and the preview zone over the composer (min 96px). `paint_drop_zones` draws on the
+    Foreground layer: a covered background, a dashed border, title + hint. The active zone gets
+    a primary tint, primary border and primary title. Repaint runs every 16ms while hovering.
+    `drop_zone_last` is the fallback when no position is known.
+  - `drop_zone_at`: only the message area means QuickSend; anywhere else (composer, sidebar,
+    unknown) means Preview, so an imprecise drop never sends.
+  - `handle_dropped_files`: directories are skipped with a toast. QuickSend sends one
+    `PickAndSendAttachment` per file. Preview pushes `PendingDropFile` entries (dedup, max 30);
+    size and a 112px thumbnail (png/jpg/gif ≤40 MB) are read on a `std::thread` and returned
+    via the `drop_thumb_tx/rx` mpsc channel.
+  - `render_pending_drop_files` strip (above the scheduled banner): a header showing the count
+    plus "Hủy tất cả", and horizontally scrolling 210×52 cards (thumbnail or icon, ellipsized
+    name, size / "Đang đọc…", ✕). `picker_reserve` +96 while the strip is non-empty.
+  - Send: `can_send` also counts pending drops. Enter/send sends the pasted image first, then
+    the dropped files; the typed text is the caption of the first file only.
+  - +1 test (zone split / default).
+- Verification: `cargo check` clean; `cargo test --lib` 267 passed; clippy reports nothing new
+  in the touched code. rustfmt was run on workspace.rs and macos_drag.rs. NOT verified live:
+  hover highlighting during a real Finder drag (especially the coordinate mapping on
+  multi-monitor setups or with a non-1.0 UI zoom), and the GUI look.
+- Status: done, pending the owner's live test.
+
+## 2026-11-11 — Investigation: "Tìm kiếm GIF" setting does nothing  (agent: Claude Code, claude-opus-5-5)
+
+- Request: Settings → "Gợi ý @" lists name suggestions, GIF search and sticker search, but in
+  practice only @-tagging works. Check GIF search (wanted as a real feature).
+- Findings:
+  - `AppSettings::enable_gif_search` is only stored and drawn as a toggle
+    (`modals.rs` ~2594). No code reads it, and the app has no GIF search, picker or send path.
+  - `enable_sticker_keyword_search` ("Tìm sticker") only AND-gates the contextual sticker
+    suggestions together with `suggest_stickers_while_typing` (`stickers.rs:1809`). There is
+    no "@sticker"-style command.
+  - Protocol evidence available offline: Zalo config has
+    `apiGifDomain = https://sticker-wpa.<domain>`,
+    `gif:{search_by_kw_limit:50, get_trending_limit:50, chat_box_gif_trending_limit:50}`,
+    `maxGifSize: 3` (MB, overridable by `settings.sharefile.max_size_gif`), message types
+    `MSG_GIF` / `CLI_MSG_TYPE_GIF` / `MSG_SUBTYPE_GIF` (photo-like `params` with
+    width/height), and the `chat.gif` msgType (23), which the store already parses.
+    `chat.rs` sticker suggest sends `gif:1` but only reads `sugg_sticker`.
+  - The captured `web-bundle/` does NOT contain the GIF search or GIF send request code
+    (lazy chunk not captured): no `/api/...gif...` paths at all.
+- Changes: none (investigation only).
+- Status: blocked on protocol evidence. Implementing search/send would mean guessing endpoints,
+  which AGENTS.md forbids. Proposed next step (needs owner OK): capture on chat.zalo.me the
+  request made when searching GIFs, and the one made when sending a GIF (e.g. to My
+  Documents); record them in re-notes/39; then implement.
+
+## 2026-11-11 — History lost after restart / re-login; phone sync "has no effect"  (agent: Claude Code, claude-opus-5-5)
+
+- Request: after quitting, reopening and logging in again, all old messages were gone, unlike
+  Zalo web; data sync seemed to do nothing. (Also: owner approved capturing the GIF protocol on
+  chat.zalo.me; see Status.)
+- Root cause (code + on-disk evidence): history was split between two databases.
+  - Writes: live messages go to `zalo_history.db` (`PersistThreads`, group/cloud sync).
+  - Reads: startup (`main.rs`), the worker reloads after login, workspace refresh, and phone
+    sync (`history_sync.rs:472/1193`, writes too) all used `store::db_path_for_account(uin)`,
+    i.e. the parked `accounts/<uin>_history.db`, which is refreshed only by
+    `save_current_account_snapshot`.
+  - Logout snapshots the live DB, then deletes it. Login never restored the parked copy, so a
+    fresh, empty live DB was created, and the next snapshot overwrote the good parked copy.
+    Phone-synced messages written to the parked DB were also clobbered by the next snapshot.
+  - On disk: `~/Library/Application Support/ctdozlite` live 1909 msgs vs parked 1824 (47 threads,
+    2026-11-02..11). `~/.ctdozlite-personal` live 422 vs parked 421 (22 threads); that data dir
+    was only created at 21:44 today, so the older history lives in the default dir, not the
+    personal one.
+- Changes:
+  - `store.rs`: `db_path_for_account` always returns `zalo_history.db` (the active account's DB).
+  - `account_manager.rs`: `activate_account_data(uin)` with an `active_account` owner marker.
+    Live files owned by another account are parked first. A missing live DB is restored from
+    `accounts/<uin>_*`. Legacy layout (no marker, both exist): the parked DB is merged into
+    live via `import_history_from_path` (INSERT OR IGNORE, so no loss). `switch_to_account`
+    writes the marker. +3 tests (temp dirs).
+  - `main.rs`: `activate_logged_in_account` runs before the threads cache / DB are read (GUI and
+    TUI paths). `worker.rs`: activation runs before the snapshot on QR and password login.
+- Caveat: the one-time legacy merge upserts thread rows from the older parked copy, and
+  `last_read_msg_id` may move back, so a few threads can show stale unread badges once.
+- Verification: `cargo test --locked` all pass (270 lib); clippy reports nothing new in the
+  touched code. rustfmt was run on main.rs and account_manager.rs. NOT verified live: a real
+  logout → login cycle, and phone sync (`sync_phone_messages`) end to end (needs the phone).
+- GIF (still blocked): no browser automation was available in this session (no Claude in Chrome /
+  built-in browser tools), so nothing was captured. Asked the owner to save the lazy JS chunk
+  that loads when opening the GIF panel on chat.zalo.me into `web-bundle/`.
+
+## 2026-11-11 — GIF search & send via the composer `@gif` command  (agent: Claude Code, claude-opus-5-5)
+
+- Request: make Settings → "Tìm kiếm GIF" real; the owner approved capturing the protocol on
+  chat.zalo.me with BrowserSkill (Main Chrome) and sending one test GIF to "My Documents".
+- Evidence (re-notes/39_gif_search_send.md, capture-verified):
+  - `GET {sticker}/api/message/giphy/trending` params `{offset,limit,imei}`.
+  - `GET {sticker}/api/message/giphy/search` params `{keyword,offset,limit}`.
+  - `POST {file}/api/{message|group}/gif` with an EMPTY body; params in the query string:
+    `{thumb,width,height,msg:"",type:0,href,contentId,[visibility],src,toid|grid,clientId:"<str>"}`.
+  - Results arrive as `data.data_list[{id, original{url,w,h}, normal{url,w,h}}]` on
+    `zgif-v2.zdn.vn`. src 7 = composer `@gif` command.
+  - The test send returned error_code 0 and showed "Bạn: GIF" in My Documents. The source chunk
+    was saved as `web-bundle/lazy-1.c72c0957b455ab70b73c.js` (16 MB).
+- Changes:
+  - `chat.rs`: `GifItem`, `parse_gif_list` (drops untrusted hosts / id-less items),
+    `gif_trending`, `gif_search`, `gif_send_body`, `send_gif_with_client_id` (local echo is a
+    photo-style `ChatMessage`, text `[GIF]`). Hosts come from `s.domains.*` with an
+    `endpoints::service` fallback. +2 tests.
+  - `worker.rs`: `WorkerCmd::SearchGifs{query,seq}` (empty → trending, limit 30) and
+    `WorkerCmd::SendGif` (→ `AttachmentSent` / `SendFailed`). `gui.rs`: `GuiEvent::GifResults`
+    (stale seq ignored) plus gif_* state.
+  - `workspace.rs`: `gif_command_query` (`@gif` + whitespace, case-insensitive), 350 ms
+    debounced `update_gif_search`, a `render_gif_popover` 4-column grid above the composer
+    (thumbnails via `FetchStickerImage`, key `thumb_<md5>`), keys ←→↑↓ / Enter (Enter
+    swallowed while there are no results, so "@gif…" is never sent as text) / Esc (dismiss for
+    that text). Click sends. Mention suggestions are off in GIF mode. Gated by
+    `settings.enable_gif_search`. +2 tests.
+  - `messages.rs`: `[GIF]` is not shown as a photo caption. `modals.rs`: setting hint now says
+    "Gõ @gif + từ khóa…".
+- Verification: `cargo test --locked` all pass (274 lib); clippy reports nothing new in the
+  touched code. A read-only live probe (temporary example, deleted afterwards) could NOT run:
+  both saved sessions (`~/.ctdozlite-personal` and Application Support) return 600 even for
+  get_friends, i.e. they are expired. So search/send from ctdozlite itself is NOT verified live;
+  only the wire format is (from the web capture plus the source).
+- Status: done, pending a live test after re-login.
+
+## 2026-11-11 — Turn off Claude co-author attribution in commits/PRs  (agent: Claude Code, claude-opus-5-5)
+
+- Request: Stop adding "Co-Authored-By: Claude" to GitHub commits.
+- Changes: user-global `~/.claude/settings.json` (outside the repo) — added
+  `"attribution": {"commit": "", "pr": "", "sessionUrl": false}`. No repo files changed besides this log.
+- Verification: `jq -e '.attribution'` parses the file and shows the block. Commits already in
+  history are NOT rewritten (only new ones are affected).
+- Status: done.
+
+## 2026-11-11 — Release all fork work to `main`, delete `personal-hardened`  (agent: Claude Code, claude-opus-5-5)
+
+- Request: commit and push everything to `main` of github.com/minhkhang1008/ctdozlite, delete
+  the `personal-hardened` branch, and make the docs professional.
+- Pre-commit audit: scanned the diff and the new files for UIN/IMEI/tokens/emails/personal paths;
+  none found. A captured Giphy id in a test was swapped for a dummy. The local-only files are
+  now git-ignored: `.claude/`, `.agents/skills/` (machine symlinks), `active_account` (holds the
+  UIN), and `web-bundle/lazy-*.js` (16 MB Zalo JS, referenced by URL in re-notes/39 and not
+  redistributed, per the README disclaimer). `.agents/WORKLOG.md` is tracked as AGENTS.md
+  requires.
+- Docs:
+  - CHANGELOG `[Unreleased]` (Security/Added/Changed/Fixed).
+  - README fork notice and module tree (new files; updater and REST/MCP marked disabled).
+  - TINH_NANG matrix: ⌘V paste ✅; GIF, mentions, reply-by-double-click, reactions viewer,
+    drag & drop zones; updater and REST/MCP 🚫; the Cyrillic "Авто-Reply" typo fixed.
+  - HUONG_DAN_SU_DUNG §2.2 interactions. re-notes/39 now says where the chunk lives.
+- Commits: chore(harness) worklog/ignore → feat(ui) code batch → docs. `main` is
+  fast-forwarded from `personal-hardened` (which carries the security commit 1c691ae).
+- Verification: `cargo build --locked` and `cargo test --locked` pass. Not split per feature:
+  the features share workspace.rs / gui.rs / worker.rs hunks, so per-feature commits would
+  not build on their own.
