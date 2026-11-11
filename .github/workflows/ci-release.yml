@@ -489,20 +489,25 @@ jobs:
           PY
           cat SHA256SUMS.txt
           cat latest.json
-      # Release notes: a short pointer to the docs plus GitHub's auto-generated commit list.
-      # Edit CHANGELOG.md for the curated notes; nothing version-specific is hardcoded here.
+      # Release notes = the version's CHANGELOG section, one short line per change; the in-app
+      # update dialog lists these bullets. GitHub's auto commit list is off (it polluted that list).
+      - uses: actions/checkout@v4
+        with:
+          path: src_checkout
+          sparse-checkout: |
+            CHANGELOG.md
+            scripts/release_notes.py
+          sparse-checkout-cone-mode: false
+      - name: Build release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python3 src_checkout/scripts/release_notes.py "$VERSION" src_checkout/CHANGELOG.md "${{ github.repository }}" > release_notes.md
+          cat release_notes.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           name: ctdozlite-next ${{ needs.prepare.outputs.tag_name }}
           files: release_assets/*
-          generate_release_notes: true
-          body: |
-            **ctdozlite-next ${{ needs.prepare.outputs.tag_name }}**: client Zalo desktop viết bằng Rust, tối ưu cho macOS.
-
-            - Có gì mới: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.prepare.outputs.tag_name }}/CHANGELOG.md)
-            - Cài đặt: [docs/CAI_DAT.md](https://github.com/${{ github.repository }}/blob/main/docs/CAI_DAT.md) · Tính năng: [docs/TINH_NANG.md](https://github.com/${{ github.repository }}/blob/main/docs/TINH_NANG.md)
-
-            **macOS:** `ctdozlite-<phiên bản>-macos-arm64.dmg` (Apple Silicon), `-macos-x86_64.dmg` (Intel) hoặc `-macos.dmg` (Universal).
-            App chưa được Apple công chứng: lần đầu mở hãy chuột phải → **Open**. Kiểm tra tệp bằng `SHA256SUMS.txt`.
+          generate_release_notes: false
+          body_path: release_notes.md

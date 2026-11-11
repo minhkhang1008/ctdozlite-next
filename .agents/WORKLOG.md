@@ -716,3 +716,23 @@ Entry template:
   tab, the countdown and help link render, and the window starts maximized. NOT verified: a
   logged-in session (sidebar labels, the drawer in light mode) and real QR expiry auto-refresh
   end to end.
+
+## 2026-11-12 — Update dialog shows the actual changes, not just links  (agent: Claude Code, claude-opus-5-5)
+
+- Request: the in-app "Cập nhật phần mềm" card listed only CHANGELOG/CAI_DAT links; show a short
+  list of the changes instead.
+- Cause: the CI release body was a fixed pointer text, and the app lists every `- ` bullet of the
+  release body (`extract_concise_changelog`).
+- Changes:
+  - New `scripts/release_notes.py <ver> [CHANGELOG] [owner/repo]`: takes the `## [ver]` section
+    and emits one short line per bullet (the bold title, minus "(`src/…`)" refs), with headings
+    mapped to Vietnamese and a non-bullet "Chi tiết / Cài đặt" line at the end.
+  - `ci-release.yml` release job: sparse-checks out CHANGELOG + script, builds
+    `release_notes.md`, uses `body_path` with `generate_release_notes: false` (GitHub's commit
+    list leaked "by @user in https://…" bullets into the dialog).
+  - `modals.rs`: `short_changelog_title` trims long "**Title:** text" bullets. The extractor
+    skips link-only bullets ("Có gì mới:", "Cài đặt:") and GitHub auto commit lines. +1 test.
+  - The published v0.2.0 release body was regenerated from the tagged CHANGELOG and updated
+    with `gh release edit`, so the installed app shows the list now.
+- Verification: the script output was checked for 0.2.0; workflow YAML validated; the new test
+  passes along with the full `cargo test --locked`.

@@ -8873,6 +8873,24 @@ fn build_blurred_backdrop_image(src: &egui::ColorImage, is_dark: bool) -> egui::
 
 /// Extract up to 6 concise changelog bullet lines from a GitHub Release body,
 /// skipping images (`![...]`), tables (`|...|`), code blocks (` ``` `), and OS install instructions.
+/// "**Title (`src/x.rs`):** long text" → "Title"; other bullets are kept as written.
+fn short_changelog_title(bullet: &str) -> String {
+    let Some(rest) = bullet.strip_prefix("**") else {
+        return bullet.to_string();
+    };
+    let Some(end) = rest.find("**") else {
+        return bullet.to_string();
+    };
+    let mut title = rest[..end].trim().trim_end_matches(':').trim().to_string();
+    // Drop a trailing file-reference group such as "(`src/chat.rs`, `src/gui/x.rs`)".
+    if let Some(open) = title.rfind(" (`") {
+        if title.ends_with(')') {
+            title.truncate(open);
+        }
+    }
+    title
+}
+
 fn extract_concise_changelog(markdown: &str) -> Vec<String> {
     let mut bullets: Vec<String> = Vec::new();
     let mut in_code = false;
@@ -8915,7 +8933,15 @@ fn extract_concise_changelog(markdown: &str) -> Vec<String> {
             {
                 continue;
             }
-            bullets.push(b_clean.to_string());
+            // Link-only pointers ("Có gì mới: [CHANGELOG.md](…)") and GitHub's auto commit
+            // lines ("… by @user in https://…") are not changes worth listing.
+            if b_low.starts_with("có gì mới:")
+                || b_low.starts_with("cài đặt:")
+                || (b_low.contains(" by @") && b_low.contains(" in https://"))
+            {
+                continue;
+            }
+            bullets.push(short_changelog_title(b_clean));
         }
     }
     bullets
@@ -9120,6 +9146,28 @@ fn extract_markdown_links_inline(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod changelog_bullet_tests {
+    use super::*;
+
+    #[test]
+    fn concise_changelog_keeps_short_titles_and_skips_links() {
+        let md = "## ctdozlite-next v0.2.1\n\n### Tính năng mới\n\
+- **Tìm và gửi GIF bằng lệnh `@gif` (`src/chat.rs`, `src/gui/workspace.rs`):** `@gif` hiện GIF…\n\
+- Chọn nhiều tin nhắn\n\
+- Có gì mới: [CHANGELOG.md](https://x)\n\
+* feat(ui): stuff by @someone in https://github.com/x/pull/1\n\
+Chi tiết: [CHANGELOG.md](https://x)\n";
+        assert_eq!(
+            extract_concise_changelog(md),
+            vec![
+                "Tìm và gửi GIF bằng lệnh `@gif`".to_string(),
+                "Chọn nhiều tin nhắn".to_string()
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
