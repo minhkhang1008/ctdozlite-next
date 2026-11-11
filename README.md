@@ -13,7 +13,8 @@ tập trung vào **macOS**.
 ## Khác gì so với bản gốc
 
 **Riêng tư & bảo mật**
-- Tắt tự động cập nhật và REST API/MCP: app không kết nối GitHub và không mở cổng mạng cục bộ.
+- Tắt REST API/MCP: app không mở cổng mạng cục bộ.
+- Tự cập nhật từ Releases của repo này: kiểm tra SHA-256 rồi thay app tại chỗ (macOS) và mở lại.
 - Token phiên (`zpw_sek`, cookie) chỉ được gửi tới domain của Zalo (`*.zalo.me`, `*.zaloapp.com`, `*.zadn.vn`, `*.zdn.vn`).
 - `session.json` và cơ sở dữ liệu tin nhắn chỉ chủ máy đọc được (quyền `0600`).
 
@@ -29,14 +30,14 @@ Danh sách đầy đủ: [CHANGELOG](CHANGELOG.md).
 
 ## Cài đặt
 
-**Tải bản dựng sẵn:** vào [Releases](https://github.com/minhkhang1008/ctdozlite/releases), tải
+**Tải bản dựng sẵn:** vào [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases), tải
 `ctdozlite-<phiên bản>-macos-arm64.dmg` (Apple Silicon) hoặc `-x86_64` (Intel), kéo app vào
 Applications. App chưa được Apple công chứng, nên lần đầu mở hãy chuột phải → **Open**.
 
 **Tự build:** cần Rust 1.75+, Xcode Command Line Tools và CMake.
 
 ```bash
-git clone https://github.com/minhkhang1008/ctdozlite.git && cd ctdozlite
+git clone https://github.com/minhkhang1008/ctdozlite-next.git && cd ctdozlite-next
 export CMAKE_POLICY_VERSION_MINIMUM=3.5      # nếu dùng CMake 4.x
 cargo run --release -- --gui                  # chạy thử
 bash packaging/package-local.sh               # đóng gói .dmg vào dist/

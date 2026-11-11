@@ -8,6 +8,18 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+### Added (Tính năng mới)
+- **Tự động cập nhật từ Releases của ctdozlite-next:** Kiểm tra khi mở app và mỗi 30 phút, báo qua Notification Center; trên macOS tải `.dmg`, xác minh SHA-256 và chữ ký, thay app tại chỗ rồi tự mở lại.
+- **Thanh thao tác khi rê chuột vào tin nhắn:** Ba nút Trả lời, Chia sẻ và "…" (menu Copy / Ghim / Đánh dấu / Tuỳ chọn khác / Thu hồi / Xóa chỉ ở phía tôi) như Zalo PC.
+- **Hộp thoại Chia sẻ mới:** Tìm kiếm không dấu, tab Gần đây / Nhóm trò chuyện / Bạn bè, chọn nhiều hội thoại, xem trước nội dung và gửi kèm lời nhắn.
+
+### Changed (Thay đổi)
+- Đổi tên hiển thị thành **ctdozlite-next** (tiêu đề cửa sổ, thanh tiêu đề, Cài đặt, thông báo, `--version`). Tên tệp chạy, bundle id và thư mục dữ liệu giữ nguyên.
+- Giao diện tối: nền tối hơn, bong bóng tin nhắn màu xám để tách khỏi nền.
+
+### Fixed (Sửa lỗi)
+- **Thanh soạn tin bị đẩy khuất khi đang trả lời:** Chiều cao khu vực dưới danh sách tin nhắn nay được đo thực tế thay vì ước lượng; phần xem trước tin được trả lời chỉ còn một dòng.
+
 ## [0.2.0] - 2026-11-12
 
 > Bản phát hành đầu tiên của ctdozlite-next (tối ưu macOS). Các thay đổi giao thức có bằng chứng trong `re-notes/38`, `re-notes/39`.

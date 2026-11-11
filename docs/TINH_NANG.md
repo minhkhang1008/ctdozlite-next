@@ -59,5 +59,5 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 | Giao diện terminal (TUI) | ✅ | `--tui` |
 | Thông báo tin nhắn mới (macOS) | ✅ | Notification Center; không thông báo tin của chính mình |
 | Emoji màu, hiển thị tiếng Việt/CJK | ✅ | Dùng font hệ thống |
-| Tự động cập nhật | 🚫 | Tắt để app không kết nối GitHub; cập nhật bằng bản Release mới |
+| Tự động cập nhật | ✅ | Kiểm tra Releases của repo này khi mở app và mỗi 30 phút; tải, xác minh SHA-256, thay app tại chỗ rồi mở lại (macOS). **Cài đặt → Kiểm tra cập nhật** để kiểm tra thủ công |
 | REST API cục bộ & MCP server | 🚫 | Tắt để không mở cổng mạng |

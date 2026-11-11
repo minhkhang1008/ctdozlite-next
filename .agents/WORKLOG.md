@@ -569,3 +569,69 @@ Entry template:
   replaced by a generic `ctdozlite-next vX.Y.Z` with links built from `github.repository`.
   YAML validated with Ruby.
 - Verification: `cargo build --locked` and `cargo test --locked` pass.
+
+## 2026-11-12 — Release ctdozlite-next v0.2.0  (agent: Claude Code, claude-opus-5-5)
+
+- Request: do the release (the owner enabled Actions and pushed the docs/CI commits).
+- Steps: a dry run of CI on `main` (2879f98) built every platform. Two Ubuntu jobs first failed
+  with apt "Temporary failure resolving" (runner network, 31 min at 1.3 KB/s); a rerun of only
+  the failed jobs passed. Then `chore(release): v0.2.0` (7d66bee): version 0.2.0 in
+  Cargo.toml/lock, CHANGELOG `[0.2.0] - 2026-11-12`. Tag `v0.2.0` was pushed. Run 43064924907
+  passed every job and published "ctdozlite-next v0.2.0" with 14 assets.
+- Verification: downloaded `ctdozlite-0.2.0-macos-arm64.dmg`. SHA256SUMS OK;
+  `codesign --verify --deep --strict` OK (ad-hoc); Info.plist 0.2.0; arm64 Mach-O;
+  `--version` prints v0.2.0. The release body links resolve to the renamed repo.
+- Note: the owner renamed the GitHub repo to `minhkhang1008/ctdozlite-next` (GitHub redirects the
+  old name). Local `origin` still uses the old URL (changing it was blocked, so it is left for the
+  owner). Docs/Cargo/in-app links still say `minhkhang1008/ctdozlite`; update them in a follow-up.
+
+## 2026-11-12 — Rename to ctdozlite-next, re-enable updater, hover bar, share dialog, reply layout, darker theme  (agent: Claude Code, claude-opus-5-5)
+
+- Requests: (1) header "ctdozlite" → "ctdozlite-next"; (2) reply banner pushes the composer
+  off-screen; (3) re-enable auto update and rename "Zalo Lite"; (4) Zalo hover bar (Trả lời /
+  Chia sẻ / "…" menu as in the owner's screenshot); (5) Zalo-style share dialog; (6) darker
+  background, gray bubbles. Plus a question about release turnaround.
+- BrowserSkill: the chat.zalo.me agent tab kept losing "active tab" to the owner's own Zalo tab
+  ("Bạn đang mở Zalo trên một Tab khác"). Stopped rather than fight the owner's session; worked
+  from the owner's screenshots of the "…" menu and the share dialog.
+- Changes:
+  - `lib.rs` `APP_DISPLAY_NAME = "ctdozlite-next"` is used for the window/notification titles, the
+    header, the Settings card, the macOS notification fallback and `--version`. Info.plist
+    CFBundleName/DisplayName follow it. The binary, bundle id, data dir and eframe storage key
+    stay `ctdozlite`, so data and notification permissions carry over. The integration test
+    expectation was updated.
+  - Updater: removed `AUTO_UPDATER_ENABLED`; `GITHUB_REPO = minhkhang1008/ctdozlite-next`.
+    Restored the startup check (`gui.rs`) and the 30-min periodic check (`worker.rs`); the update
+    notification goes through `PostNativeNotification` (`updater::new_update_notification`).
+    New macOS in-place install in `updater.rs` (`current_app_bundle`,
+    `install_macos_app_from_dmg`, `relaunch_app_bundle_after_exit`): it runs only when running
+    from a .app and the DMG SHA-256 was supplied/verified. Steps: hdiutil attach -readonly
+    (detached on drop) → codesign --verify --deep --strict → ditto to a staging .app → rename swap
+    with a backup and rollback → strip quarantine. Relaunch waits for this PID to exit. Any
+    failure falls back to the old "open the DMG" path. AGENTS.md rule #1 was rewritten: REST/MCP
+    stays off; the updater may only use the fork repo.
+  - Reply banner: `msg_area_height` now uses the measured height of everything below the list
+    (`chat_bottom_stack_h`, measured from the scroll inner bottom to the composer bottom on the
+    previous frame, with a repaint on change) instead of the 48px estimate. The reply preview is
+    flattened to one truncated line.
+  - `messages.rs` `hover_action_bar`: 28px circles (quote, forward, three dots), left of outgoing
+    and right of incoming bubbles, bottom-aligned. Shown when hovering the bubble or bar (same
+    layer, inside the clip) or while its menu is open. "…" opens the existing menu in
+    `compact` mode (no emoji row, no reply/share; separator after Copy; "Tuỳ chọn khác ›" flyout
+    holding reminder / open photo / save file via the new `message_extra_menu_items`). The
+    outside-click close ignores the flyout and the "…" toggle. Shared `menu_frame` /
+    `style_menu_ui`. Right-click keeps the full menu.
+  - Share dialog (`modals.rs::render_forward_dialog`) rewritten: modal card with "Chia sẻ" + ✕,
+    accent-insensitive search, tabs Gần đây / Nhóm trò chuyện / Bạn bè, a checkbox list with
+    avatars (posting-restricted groups greyed), a preview box (link / photo / file / sticker /
+    text), an optional note, Hủy / Chia sẻ (n). `WorkerCmd::Forward` gained `note`, sent after a
+    successful forward in the same task (keeps order) and echoed as `MessageSent`.
+  - Theme (dark): canvas #121417, sidebar #1B1E22, input #101215, border #2E3237, in-bubble gray
+    #30343A, out-bubble blue-gray #343D4A.
+  - Docs: README, TINH_NANG, CAI_DAT (auto update), ADR 0002 re-activated, CHANGELOG
+    [Unreleased]; every `minhkhang1008/ctdozlite` link → `-next` (repo was renamed).
+- Verification: `cargo build --locked` and `cargo test --locked` all pass; clippy reports nothing
+  new in the touched code (the remaining warnings predate this work). NOT verified in the
+  running GUI (no live session available here): hover bar, menus, share dialog, reply layout,
+  colours. The macOS in-place update is untested end to end; it needs a newer release (v0.2.1+)
+  installed over v0.2.x.

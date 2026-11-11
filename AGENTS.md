@@ -11,7 +11,7 @@ Operating guide for AI agents and humans working in this repository.
 
 `ctdozlite-next` (crate `ctdozlite`, library `zalo_rust`) is a native Zalo desktop client written in Rust: `egui` GUI, `ratatui` TUI, a Tokio worker for network I/O, and a local SQLite message store. No Node.js, no Electron, no Chromium.
 
-- Repository: <https://github.com/minhkhang1008/ctdozlite> (personal fork of <https://github.com/ctdoteam1110/ctdozlite>)
+- Repository: <https://github.com/minhkhang1008/ctdozlite-next> (personal fork of <https://github.com/ctdoteam1110/ctdozlite>)
 - Rust 1.75+ / edition 2021
 - Product docs are Vietnamese (`docs/`, `README.md`); engineering standards are English (`docs/standards/`)
 
@@ -78,7 +78,7 @@ MUST read the corresponding standard file under `docs/standards/` before modifyi
 # Hướng dẫn dành cho Codex Agent (Bản cá nhân ctdozlite trên macOS)
 
 ## 1. Nguyên tắc bảo mật bất khả xâm phạm (ĐÃ VÁ - TUYỆT ĐỐI KHÔNG GỠ BỎ)
-1. **Không Auto-Updater & Không REST/MCP:** Tính năng tự động cập nhật (`updater.rs`, `worker.rs`) và REST/MCP server (`api_mcp.rs`) đã bị vô hiệu hóa chủ đích. Không bao giờ kích hoạt lại hoặc thêm kết nối tới GitHub API.
+1. **Không REST/MCP; Auto-Updater chỉ trỏ về fork:** REST/MCP server (`api_mcp.rs`) bị vô hiệu hóa chủ đích, không kích hoạt lại. Auto-updater được chủ repo bật lại (2026-11-12) và **chỉ** được kiểm tra/tải từ `github.com/minhkhang1008/ctdozlite-next` (`GITHUB_REPO` trong `src/gui/worker.rs`); luôn xác minh SHA-256 trước khi cài, không bao giờ gửi cookie/token Zalo tới GitHub, không thêm nguồn cập nhật khác.
 2. **Domain Allowlist bắt buộc:** Mọi kết nối gửi kèm `zpw_sek`, `zpw_uin` hoặc session cookie (HTTP, WebSocket, History Sync, Multipart Upload) đều phải đi qua hàm kiểm tra `is_trusted_zalo_url` (`*.zalo.me`, `*.zaloapp.com`, `*.zadn.vn`, `*.zdn.vn`).
 3. **Quyền riêng tư mạng:** Không tự động gửi HTTP GET tới các URL của tin nhắn đến để tạo Link Preview.
 4. **Quyền file & Bộ nhớ:** Mọi file nhạy cảm (`session.json`, `zalo_history.db`, file DB tạm khi giải mã) trên macOS/Unix phải giữ quyền `0o600` (thư mục `0o700`). Luồng giải nén trong `history_sync.rs` phải giữ nguyên trần dung lượng RAM.

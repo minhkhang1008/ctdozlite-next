@@ -2,7 +2,7 @@
 
 ## Cài bản dựng sẵn (macOS)
 
-Tải tại [Releases](https://github.com/minhkhang1008/ctdozlite/releases):
+Tải tại [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases):
 
 | Máy | Tệp |
 |---|---|
@@ -23,6 +23,10 @@ Muốn kiểm tra tệp tải về còn nguyên vẹn: tải kèm `SHA256SUMS.tx
 Mỗi bản Release cũng có gói Windows (`.exe`) và Linux (`.deb`, `.rpm`, `.AppImage`, `.tar.gz`) do CI
 dựng tự động, nhưng tôi chỉ kiểm thử thường xuyên trên macOS.
 
+Sau khi cài, app tự kiểm tra bản mới khi mở và mỗi 30 phút. Khi có bản mới, bấm **Cập nhật ngay**:
+app tải `.dmg`, kiểm tra SHA-256 và chữ ký, thay chính nó rồi tự mở lại. Nếu app không nằm ở thư mục
+ghi được, app sẽ mở `.dmg` để bạn cài tay.
+
 Gỡ cài đặt: xoá `ctdozlite.app`; muốn xoá cả dữ liệu thì xoá thêm
 `~/Library/Application Support/ctdozlite`.
 
@@ -31,7 +35,7 @@ Gỡ cài đặt: xoá `ctdozlite.app`; muốn xoá cả dữ liệu thì xoá t
 Cần: Rust 1.75+, Xcode Command Line Tools (`xcode-select --install`) và CMake (`brew install cmake`).
 
 ```bash
-git clone https://github.com/minhkhang1008/ctdozlite.git && cd ctdozlite
+git clone https://github.com/minhkhang1008/ctdozlite-next.git && cd ctdozlite-next
 export CMAKE_POLICY_VERSION_MINIMUM=3.5    # bắt buộc với CMake 4.x
 cargo run --release -- --gui
 ```
