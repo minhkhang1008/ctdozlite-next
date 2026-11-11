@@ -1,5 +1,7 @@
 # ADR 0002: Giao thức tự cập nhật và cấu trúc `latest.json` (Self-Updater Contract)
 
+> **ctdozlite-next:** ADR này đã ngưng áp dụng (*superseded*). Bản fork tắt hoàn toàn trình tự cập nhật để app không kết nối GitHub API; người dùng cập nhật bằng bản Release mới.
+
 - **Trạng thái:** Đã chấp nhận (Accepted)
 - **Issues liên quan:** [#12](https://github.com/ctdoteam1110/ctdozlite/issues/12), [#29](https://github.com/ctdoteam1110/ctdozlite/issues/29)
 

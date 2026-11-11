@@ -1,132 +1,69 @@
-# Hướng dẫn cài đặt ctdozlite
+# Cài đặt & phát hành
 
-Tải bản mới nhất tại **[GitHub Releases](https://github.com/ctdoteam1110/ctdozlite/releases)**. Mỗi bản phát hành đính kèm đầy đủ gói cho Linux, Windows và macOS; tên file chứa số phiên bản (dạng `x.y.z`).
+## Cài bản dựng sẵn (macOS)
 
-> Trong các lệnh bên dưới, thay `<version>` bằng số phiên bản trong tên file bạn đã tải.
+Tải tại [Releases](https://github.com/minhkhang1008/ctdozlite/releases):
 
-## Kiểm tra toàn vẹn (khuyến nghị)
+| Máy | Tệp |
+|---|---|
+| Apple Silicon (M1–M4) | `ctdozlite-<phiên bản>-macos-arm64.dmg` |
+| Intel | `ctdozlite-<phiên bản>-macos-x86_64.dmg` |
+| Chạy được trên cả hai | `ctdozlite-<phiên bản>-macos.dmg` |
 
-Tải kèm `SHA256SUMS.txt`, đặt cùng thư mục với gói cài rồi chạy:
-
-```bash
-sha256sum -c SHA256SUMS.txt --ignore-missing
-```
-
-## Linux
-
-Binary Linux được liên kết tĩnh `libopus`, `sqlite3` và `rustls`, hỗ trợ cả distro đời mới lẫn đời cũ (`glibc >= 2.31`).
-
-### Debian / Ubuntu / Linux Mint / Kali / Pop!_OS / Zorin (glibc 2.35+)
-
-Tải `ctdozlite_<version>_amd64.deb`:
-
-```bash
-sudo apt install ./ctdozlite_<version>_amd64.deb
-```
-
-### Debian 11 / Ubuntu 20.04 / Linux Mint 20 (glibc 2.31+)
-
-Tải `ctdozlite_<version>_legacy_glibc2.31_amd64.deb`:
-
-```bash
-sudo apt install ./ctdozlite_<version>_legacy_glibc2.31_amd64.deb
-```
-
-### Fedora / RHEL / Rocky Linux / AlmaLinux / CentOS Stream / openSUSE
-
-Tải `ctdozlite-<version>-1.x86_64.rpm`:
-
-```bash
-sudo dnf install ./ctdozlite-<version>-1.x86_64.rpm
-```
-
-Trên hệ dùng `yum` hoặc `zypper`, thay `dnf` bằng trình quản lý gói tương ứng.
-
-### AppImage (chạy ngay, không cần quyền root)
-
-Tải `ctdozlite-<version>-x86_64.AppImage`:
-
-```bash
-chmod +x ctdozlite-<version>-x86_64.AppImage
-./ctdozlite-<version>-x86_64.AppImage
-```
-
-Nếu hệ thống thiếu FUSE 2, chạy trực tiếp không cần mount:
-
-```bash
-./ctdozlite-<version>-x86_64.AppImage --appimage-extract-and-run
-```
-
-### Arch Linux / Manjaro / EndeavourOS / Gentoo / Void / NixOS / distro khác (`.tar.gz`)
-
-Tải `ctdozlite-<version>-linux-x86_64.tar.gz` (hoặc bản `-legacy-glibc2.31` cho máy cũ):
-
-```bash
-tar -xzf ctdozlite-<version>-linux-x86_64.tar.gz
-cd ctdozlite-<version>-linux-x86_64
-./install.sh
-```
-
-Gói `.tar.gz` kèm sẵn `install.sh` và `uninstall.sh`.
-
-## Windows (x64)
-
-- **Bộ cài đặt:** `ctdozlite-<version>-setup-windows-x86_64.exe` — chạy và làm theo hướng dẫn.
-- **Bản chạy ngay (Portable):** `ctdozlite-<version>-portable-windows-x86_64.exe` hoặc gói nén `ctdozlite-<version>-portable-windows-x86_64.zip` — không cần cài đặt.
-
-Nếu Windows SmartScreen hoặc Microsoft Defender cảnh báo ứng dụng mã nguồn mở chưa mua chứng chỉ EV Code Signing thương mại:
-1. Đối chiếu mã băm SHA-256 của file tải về với `SHA256SUMS.txt` trên trang GitHub Releases (`Get-FileHash .\ctdozlite-<version>-setup-windows-x86_64.exe -Algorithm SHA256`).
-2. Chọn **More info → Run anyway** (hoặc dùng bản `portable-windows-x86_64.exe` / `.zip`). Từ bản `v0.1.0`, bộ cài Inno Setup đã chuyển sang chuẩn nén `zip/9` không đóng khối đặc (`SolidCompression=no`), nhúng đầy đủ `VS_VERSIONINFO` + `RT_MANIFEST` (`asInvoker`) và giữ bảng ký hiệu PE để tránh cảnh báo nhầm (false positive) của bộ máy học Microsoft Defender (#58).
-
-## Tự động thông báo & cập nhật qua GitHub Releases API
-
-`ctdozlite` tích hợp sẵn bộ kiểm tra và cập nhật tự động qua REST API chính thức của GitHub (`https://api.github.com/repos/ctdoteam1110/ctdozlite/releases/latest`, kèm fallback sang `latest.json`):
-- **Khi khởi động & định kỳ mỗi 30 phút:** Ứng dụng tự động truy vấn GitHub Releases API ở luồng nền.
-- **Thông báo tức thì:** Khi phát hiện phiên bản mới (`vLatest > vCurrent`), ứng dụng tự động bắn thông báo hệ thống (OS Notification trên macOS / Windows / Linux), hiển thị huy hiệu **🚀 Cập nhật mới** trên thanh tiêu đề, thanh thông báo ở đầu khung chat và mở hộp thoại **Có bản cập nhật mới** kèm tóm tắt Changelog & nút **⬇ Cập nhật ngay**.
-- **Xác thực SHA-256 & Hoàn tác nguyên tử:** Gói tải về được kiểm tra kích thước, chữ ký thực thi (`MZ` / `ELF`) và mã băm `SHA-256` trước khi thay thế thực thi hoặc mở bộ cài đặt.
-- **Kiểm tra từ dòng lệnh (CLI):**
-  ```bash
-  ctdozlite --check-update
-  ```
-
-## macOS (Apple Silicon M1/M2/M3/M4 & Intel)
-
-- **Mac Apple Silicon (Chip M1 / M2 / M3 / M4 — ARM64):** Tải `ctdozlite-<version>-macos-arm64.dmg`.
-- **Mac Intel (`x86_64`):** Tải `ctdozlite-<version>-macos-x86_64.dmg`.
-- **Bản Universal (chạy chung cho cả chip M & Intel):** Tải `ctdozlite-<version>-macos.dmg`.
-
-Mở file `.dmg` vừa tải và kéo `ctdozlite.app` vào `/Applications`.
-
-Nếu macOS chặn ứng dụng chưa ký Apple Developer ID trả phí, bấm chuột phải vào app và chọn **Open**, hoặc chạy:
+Mở `.dmg`, kéo `ctdozlite.app` vào **Applications**. App chỉ được ký tạm (ad-hoc), chưa được Apple
+công chứng, nên lần đầu mở hãy chuột phải → **Open**, hoặc chạy:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/ctdozlite.app
 ```
-## Gỡ cài đặt
 
-| Nền tảng | Cách gỡ |
-|---|---|
-| Debian / Ubuntu (`.deb`) | `sudo apt remove ctdozlite` |
-| Fedora / RHEL (`.rpm`) | `sudo dnf remove ctdozlite` |
-| `.tar.gz` | Chạy `./uninstall.sh` trong thư mục đã giải nén |
-| AppImage | Xoá file `.AppImage` |
-| Windows | Gỡ trong **Settings → Apps**, hoặc xoá file portable |
-| macOS | Xoá `ctdozlite.app` khỏi `/Applications` |
+Muốn kiểm tra tệp tải về còn nguyên vẹn: tải kèm `SHA256SUMS.txt`, đặt cùng thư mục rồi chạy
+`shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 
-## Tự biên dịch & đóng gói cục bộ từ mã nguồn
+Mỗi bản Release cũng có gói Windows (`.exe`) và Linux (`.deb`, `.rpm`, `.AppImage`, `.tar.gz`) do CI
+dựng tự động, nhưng tôi chỉ kiểm thử thường xuyên trên macOS.
 
-Xem mục **Tự biên dịch từ mã nguồn** trong [README](../README.md#tự-biên-dịch-từ-mã-nguồn-windows--linux--macos).
+Gỡ cài đặt: xoá `ctdozlite.app`; muốn xoá cả dữ liệu thì xoá thêm
+`~/Library/Application Support/ctdozlite`.
 
-Để tự đóng gói bộ cài `.dmg` (macOS), `.tar.gz` (Linux) hoặc `.exe` (Windows) trên máy cá nhân với số phiên bản tự động đọc từ `Cargo.toml` (không làm bẩn sentinel `0.0.0` trong `packaging/macos/Info.plist` và `packaging/windows/installer.iss`):
+## Tự build từ mã nguồn
 
-- **macOS / Linux:**
-  ```bash
-  ./packaging/package-local.sh
-  ```
-- **Windows (PowerShell):**
-  ```powershell
-  pwsh -File packaging\package-local.ps1
-  ```
+Cần: Rust 1.75+, Xcode Command Line Tools (`xcode-select --install`) và CMake (`brew install cmake`).
 
-Gói sinh ra nằm trong thư mục `dist/`.
+```bash
+git clone https://github.com/minhkhang1008/ctdozlite.git && cd ctdozlite
+export CMAKE_POLICY_VERSION_MINIMUM=3.5    # bắt buộc với CMake 4.x
+cargo run --release -- --gui
+```
 
+Đóng gói `.dmg` trên máy (đúng kiến trúc của máy đang dùng; số phiên bản đọc từ `Cargo.toml`):
+
+```bash
+bash packaging/package-local.sh            # → dist/ctdozlite-<phiên bản>-macos-<arch>.dmg
+```
+
+`.dmg` này đã kèm helper thông báo DailyNotifier và icon. Trên Windows dùng
+`pwsh -File packaging\package-local.ps1`.
+
+## Phát hành phiên bản mới
+
+CI (`.github/workflows/ci-release.yml`) chạy test trên mỗi lần push vào `main`. Khi bạn đẩy một tag
+`v*`, CI dựng gói cho macOS/Windows/Linux rồi tự tạo bản Release.
+
+1. Nâng `version` trong `Cargo.toml` (ví dụ `0.2.0`), chạy `cargo check` để cập nhật `Cargo.lock`.
+2. Trong `CHANGELOG.md`, đổi `## [Unreleased]` thành `## [0.2.0] - <ngày>` và thêm một mục
+   `## [Unreleased]` trống ở trên.
+3. Commit, gắn tag rồi đẩy lên. Tag phải trùng phiên bản trong `Cargo.toml` và nằm trên `main`,
+   nếu không CI sẽ dừng:
+
+   ```bash
+   git commit -am "chore(release): v0.2.0"
+   git push origin main
+   git tag -a v0.2.0 -m "ctdozlite-next v0.2.0"
+   git push origin v0.2.0
+   ```
+
+4. Theo dõi tiến trình ở tab **Actions** (hoặc `gh run watch`). Khi xong, bản Release có đủ các gói
+   và `SHA256SUMS.txt`.
+
+Có thể chạy lại thủ công: **Actions → CI & Cross-Platform Release → Run workflow**, bật `publish`.

@@ -90,7 +90,7 @@ components:
 
 # Design System: ctdozlite (ứng dụng desktop egui)
 
-> Tài liệu này mô tả **app desktop** (`src/gui/`). Trang landing có file riêng: `ctdozlite_landing/DESIGN.md`.
+> Tài liệu này mô tả **app desktop** (`src/gui/`).
 > Giá trị màu, bo góc, khoảng cách ở đây được đọc trực tiếp từ code (`src/gui/theme.rs`, `messages.rs`, `workspace.rs`, `main.rs`). Khi code đổi thì cập nhật file này trong cùng commit.
 > **Frontmatter là nguồn chuẩn cho token.** Phần văn xuôi giải thích cách dùng, không lặp lại giá trị khác.
 

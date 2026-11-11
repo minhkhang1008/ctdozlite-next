@@ -545,3 +545,27 @@ Entry template:
 - Verification: `cargo build --locked` and `cargo test --locked` pass. Not split per feature:
   the features share workspace.rs / gui.rs / worker.rs hunks, so per-feature commits would
   not build on their own.
+
+## 2026-11-11 — Rebrand docs as ctdozlite-next; drop upstream-team material  (agent: Claude Code, claude-opus-5-5)
+
+- Request: README and other .md files belong to the original team; ctdozlite-next is the owner's
+  personal build and needs simple docs. Owner has enabled GitHub Actions.
+- Removed (upstream-only): `ctdozlite_landing/` (site, contributors, issue feeds); `docs/i18n/`;
+  `docs/KE_HOACH_PRODUCTION.md`; `docs/DA_BIET.md` (auto-generated from upstream issues);
+  the mdBook site (`docs/README.md`, `docs/SUMMARY.md`, `book.toml`, `.github/workflows/docs.yml`,
+  `scripts/build-docs.sh`, `scripts/gen-known-issues.sh`); `.github/ISSUE_TEMPLATE/`; and
+  `docs/assets/demo-windows.png`.
+- Rewritten short: README (fork intro, differences, install, quick use, attribution + licence
+  kept), `docs/CAI_DAT.md` (macOS install, local build, release-by-tag steps),
+  `docs/TINH_NANG.md` (no upstream issue column), `docs/KHAC_PHUC_SU_CO.md`.
+- Edited: HUONG_DAN (binary name `zalo-rust` → `ctdozlite`); AGENTS.md (fork repo URL, correct
+  `--bin ctdozlite`); CHANGELOG (note that ≤0.1.0 is upstream history); ADR 0002 marked
+  superseded; issue-tracker standard now points at the fork; DESIGN.md landing reference
+  removed. `Cargo.toml` homepage/repository → fork; the Settings "Tìm hiểu" link → fork docs.
+- Kept on purpose: upstream copyright in `build.rs` Windows metadata and the licences; the
+  engineering docs (standards, ADRs, re-notes, KIEN_TRUC, GIAO_THUC, DESIGN, GLOSSARY,
+  SESSION_SECURITY); the binary/bundle name `ctdozlite` (renaming it would move user data dirs).
+- CI: the release step's hardcoded v0.0.7 title/body (upstream links, auto-update claims) was
+  replaced by a generic `ctdozlite-next vX.Y.Z` with links built from `github.repository`.
+  YAML validated with Ruby.
+- Verification: `cargo build --locked` and `cargo test --locked` pass.

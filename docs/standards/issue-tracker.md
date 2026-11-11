@@ -1,6 +1,6 @@
 # Issue Tracking & Triage Standards
 
-Issues, specs and tickets live in **GitHub Issues** for `ctdoteam1110/ctdozlite`. Use the `gh` CLI for every operation.
+Issues, specs and tickets live in **GitHub Issues** for `minhkhang1008/ctdozlite`. Use the `gh` CLI for every operation.
 
 > Source of truth for ticket state. Local markdown notes under `re-notes/` are evidence, never tickets.
 
@@ -75,14 +75,14 @@ Canonical vocabulary consumed by `/triage`. Do not introduce synonyms.
 2. Link it to the parent:
 
    ```bash
-   CHILD_ID=$(gh api repos/ctdoteam1110/ctdozlite/issues/<child_number> --jq .id)
-   gh api --method POST repos/ctdoteam1110/ctdozlite/issues/<parent_number>/sub_issues -F sub_issue_id=$CHILD_ID
+   CHILD_ID=$(gh api repos/minhkhang1008/ctdozlite/issues/<child_number> --jq .id)
+   gh api --method POST repos/minhkhang1008/ctdozlite/issues/<parent_number>/sub_issues -F sub_issue_id=$CHILD_ID
    ```
 
 3. Query children:
 
    ```bash
-   gh api repos/ctdoteam1110/ctdozlite/issues/<parent_number>/sub_issues \
+   gh api repos/minhkhang1008/ctdozlite/issues/<parent_number>/sub_issues \
      --jq '.[] | "#\(.number): \(.title)"'
    ```
 

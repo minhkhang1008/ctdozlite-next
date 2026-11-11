@@ -9,9 +9,9 @@ Operating guide for AI agents and humans working in this repository.
 
 ## Project
 
-`ctdozlite` (`zalo-rust`) is a native Zalo desktop client written in Rust: `egui` GUI, `ratatui` TUI, a Tokio worker for network I/O, and a local SQLite message store. No Node.js, no Electron, no Chromium.
+`ctdozlite-next` (crate `ctdozlite`, library `zalo_rust`) is a native Zalo desktop client written in Rust: `egui` GUI, `ratatui` TUI, a Tokio worker for network I/O, and a local SQLite message store. No Node.js, no Electron, no Chromium.
 
-- Repository: <https://github.com/ctdoteam1110/ctdozlite>
+- Repository: <https://github.com/minhkhang1008/ctdozlite> (personal fork of <https://github.com/ctdoteam1110/ctdozlite>)
 - Rust 1.75+ / edition 2021
 - Product docs are Vietnamese (`docs/`, `README.md`); engineering standards are English (`docs/standards/`)
 
@@ -20,7 +20,7 @@ Operating guide for AI agents and humans working in this repository.
 | Task | Command |
 | :--- | :--- |
 | Build (debug) | `cargo build --locked` |
-| Build (release binary) | `cargo build --release --locked --bin zalo-rust` |
+| Build (release binary) | `cargo build --release --locked --bin ctdozlite` |
 | Test | `cargo test --locked` |
 | Format | `cargo fmt --all` |
 | Lint | `cargo clippy --all-targets -- -D warnings` |
