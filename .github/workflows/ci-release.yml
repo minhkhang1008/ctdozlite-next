@@ -478,28 +478,20 @@ jobs:
           PY
           cat SHA256SUMS.txt
           cat latest.json
-      # Install instructions live in docs/CAI_DAT.md. The release body includes
-      # concise Vietnamese highlights so the in-app GitHub Releases API updater
-      # renders exact bug fixes and feature updates directly inside ctdozlite.
+      # Release notes: a short pointer to the docs plus GitHub's auto-generated commit list.
+      # Edit CHANGELOG.md for the curated notes; nothing version-specific is hardcoded here.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
-          name: ctdozlite ${{ needs.prepare.outputs.tag_name }} — Sửa lỗi gõ tiếng Việt Telex macOS (#71), Xem ảnh trực tiếp (#72), Tự động đồng bộ SĐT (#73) & Tải file giữ nguyên tên gốc (#74)
+          name: ctdozlite-next ${{ needs.prepare.outputs.tag_name }}
           files: release_assets/*
           generate_release_notes: true
           body: |
-            > **Hướng dẫn cài đặt:** [docs/CAI_DAT.md](https://github.com/ctdoteam1110/ctdozlite/blob/main/docs/CAI_DAT.md) · **Tính năng & giới hạn:** [docs/TINH_NANG.md](https://github.com/ctdoteam1110/ctdozlite/blob/main/docs/TINH_NANG.md) · **Trang chủ:** https://ctdozlite.ctdo.net/
-            >
-            > Chọn đúng gói trong mục **Assets** bên dưới cho hệ điều hành của bạn (hỗ trợ Linux `.deb`/`.rpm`/`.AppImage`/`.tar.gz`, Windows `.exe`, và macOS `.dmg` cho cả **Apple Silicon M1/M2/M3/M4 `arm64`**, **Mac Intel `x86_64`** & **Universal**).
+            **ctdozlite-next ${{ needs.prepare.outputs.tag_name }}**: client Zalo desktop viết bằng Rust, tối ưu cho macOS.
 
-            ### 🐛 Đã sửa lỗi trong v0.0.7 (Bug Fixes)
-            - **Sửa lỗi gõ tiếng Việt Telex trên macOS bị nuốt dấu cách & lỗi phím Enter ([#71](https://github.com/ctdoteam1110/ctdozlite/issues/71)):** Bảo toàn ký tự khoảng trắng (`" "`) trong sự kiện `Event::Ime(ImeEvent::Commit(" "))` của macOS NSTextInputClient/egui trước đây bị lọc nhầm bởi `.is_empty()`, đồng thời gắn cờ `ime_preedit_active` để phím `Enter` chỉ xác nhận từ đang gõ dấu thay vì gửi tin nhắn sớm.
-            - **Hiển thị trực tiếp ảnh trong hội thoại & Trình xem ảnh tích hợp ([#72](https://github.com/ctdoteam1110/ctdozlite/issues/72)):** Phóng to khung hiển thị ảnh trực tiếp trong bong bóng chat lên tối đa `340x320`, tự động ẩn chuỗi URL CDN thô (`https://...zdn.vn/...`) khi đã có ảnh đính kèm, và chuyển toàn bộ thao tác bấm vào ảnh hoặc liên kết ảnh sang mở `ImageViewerModal` ngay trong ứng dụng (hỗ trợ phóng to/thu nhỏ, sao chép ảnh vào clipboard và lưu về máy).
-            - **Tự động kích hoạt đồng bộ tin nhắn từ điện thoại ngay khi đăng nhập ([#73](https://github.com/ctdoteam1110/ctdozlite/issues/73)):** Tự động khởi chạy đồng bộ lịch sử đám mây kèm gửi gói yêu cầu WebSocket `cmd 12000` & `cmd 12888` tới điện thoại ngay sau khi đăng nhập QR/Mật khẩu hoặc khôi phục phiên mà không cần bấm nút thủ công.
-            - **Tải tệp đính kèm trực tiếp & giữ nguyên tên file gốc của người gửi ([#74](https://github.com/ctdoteam1110/ctdozlite/issues/74)):** Sửa thứ tự trích xuất tên tệp trong `parse_chat_message` (`src/chat.rs`) ưu tiên trường `title` trước `href` để không bao giờ lấy nhầm đường dẫn endpoint `renewMedia.doc` của Zalo CDN, đồng thời tải trực tiếp tệp về thư mục `Downloads` với đúng tên gốc của người gửi thay vì mở trình duyệt ngoài.
+            - Có gì mới: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.prepare.outputs.tag_name }}/CHANGELOG.md)
+            - Cài đặt: [docs/CAI_DAT.md](https://github.com/${{ github.repository }}/blob/main/docs/CAI_DAT.md) · Tính năng: [docs/TINH_NANG.md](https://github.com/${{ github.repository }}/blob/main/docs/TINH_NANG.md)
 
-            ### ✨ Tính năng nổi bật từ v0.0.6 & v0.0.5 (Recent Highlights)
-            - **Trang Danh bạ chuẩn Zalo PC & Gói nhãn dán động "Mèo Ami Bụng Bự (GIF)":** Hợp nhất mục Danh bạ với 4 phân mục, gom nhóm `A–Z`, hỗ trợ hiển thị văn bản định dạng giàu (Markdown & Zalo RTF `textProperties`), đồng bộ tắt thông báo hai chiều ([#67](https://github.com/ctdoteam1110/ctdozlite/issues/67)) và đa tài khoản / Proxy ([#64](https://github.com/ctdoteam1110/ctdozlite/issues/64)).
-            - **Tự động thông báo & cập nhật trực tiếp qua GitHub Releases API:** Tự động kiểm tra bản mới qua `https://api.github.com/repos/ctdoteam1110/ctdozlite/releases/latest` khi mở ứng dụng và định kỳ mỗi 30 phút, gửi thông báo hệ điều hành, hiển thị thanh banner cùng hộp thoại chi tiết những gì đã sửa/cập nhật và nút **Cập nhật tự động ngay** (xác thực `SHA256SUMS.txt`).
-            - **Hẹn giờ gửi tin nhắn ([#38](https://github.com/ctdoteam1110/ctdozlite/issues/38)), REST API / MCP Server / Auto-Reply ([#35](https://github.com/ctdoteam1110/ctdozlite/issues/35)), Sửa lỗi trùng tên Zalo ([#63](https://github.com/ctdoteam1110/ctdozlite/issues/63)) & Failover đa máy chủ ([#27](https://github.com/ctdoteam1110/ctdozlite/issues/27)).**
+            **macOS:** `ctdozlite-<phiên bản>-macos-arm64.dmg` (Apple Silicon), `-macos-x86_64.dmg` (Intel) hoặc `-macos.dmg` (Universal).
+            App chưa được Apple công chứng: lần đầu mở hãy chuột phải → **Open**. Kiểm tra tệp bằng `SHA256SUMS.txt`.
