@@ -25,7 +25,10 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 | Trả lời trích dẫn | ✅ | Nhấp đúp vào tin; trong nhóm tự tag người gửi; `Esc` để thoát |
 | Tag thành viên (`@`) | ✅ | Tag màu xanh, người được tag nhận thông báo |
 | Thả cảm xúc & xem ai đã thả | ✅ | Rê chuột hoặc bấm vào cảm xúc dưới tin nhắn |
-| Chuyển tiếp, thu hồi, xoá phía tôi, ghim, đánh dấu sao | ✅ | Chuột phải vào tin nhắn |
+| Chuyển tiếp, thu hồi, xoá phía tôi, ghim, đánh dấu sao | ✅ | Rê chuột vào tin để hiện nút Trả lời / Chia sẻ / "…", hoặc chuột phải |
+| Chia sẻ tới nhiều hội thoại | ✅ | Tìm kiếm, tab Gần đây / Nhóm / Bạn bè, lọc theo Phân loại, kèm lời nhắn |
+| Chọn nhiều tin nhắn | ✅ | Menu "…" → Chọn nhiều tin nhắn: Sao chép, Chia sẻ, Xóa hàng loạt |
+| Xem chi tiết tin nhắn | ✅ | Menu "…" → Xem chi tiết |
 | Gửi ảnh & tệp | ✅ | Nút đính kèm, kéo-thả (Gửi nhanh / Xem trước), dán ảnh `⌘V` |
 | Sticker & gợi ý sticker khi gõ | ✅ | |
 | Tìm và gửi GIF | ✅ | `@gif` hoặc `@gif từ khoá` |

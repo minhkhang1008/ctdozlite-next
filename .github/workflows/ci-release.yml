@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Docs-only pushes skip CI entirely (path filters never apply to tag pushes).
+    paths-ignore: ["**.md", "docs/**", ".agents/**", "re-notes/**", "LICENSE-*"]
   pull_request:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", ".agents/**", "re-notes/**", "LICENSE-*"]
   workflow_dispatch:
     inputs:
       version:
@@ -96,7 +99,9 @@ jobs:
   linux-packages:
     name: Linux Multi-Format (.deb / .rpm / .AppImage / .tar.gz)
     needs: prepare
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full-package')
+    # Installers only for releases (tag v*), manual runs, or PRs labelled ci:full-package.
+    # Plain pushes to main run just the `test` job (~2 min instead of ~25).
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full-package'))
     runs-on: ubuntu-22.04
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -214,7 +219,9 @@ jobs:
   linux-legacy-glibc231:
     name: Linux Legacy glibc 2.31 (Debian 11 / Ubuntu 20.04+)
     needs: prepare
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full-package')
+    # Installers only for releases (tag v*), manual runs, or PRs labelled ci:full-package.
+    # Plain pushes to main run just the `test` job (~2 min instead of ~25).
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full-package'))
     runs-on: ubuntu-22.04
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -275,7 +282,9 @@ jobs:
   windows-exe:
     name: Windows (MSVC x86_64 + .exe)
     needs: prepare
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full-package')
+    # Installers only for releases (tag v*), manual runs, or PRs labelled ci:full-package.
+    # Plain pushes to main run just the `test` job (~2 min instead of ~25).
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full-package'))
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -304,7 +313,9 @@ jobs:
   macos-dmg:
     name: macOS (Apple Silicon arm64 + Intel x86_64 + Universal .dmg)
     needs: prepare
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full-package')
+    # Installers only for releases (tag v*), manual runs, or PRs labelled ci:full-package.
+    # Plain pushes to main run just the `test` job (~2 min instead of ~25).
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full-package'))
     runs-on: macos-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}

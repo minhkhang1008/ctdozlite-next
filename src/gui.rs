@@ -105,6 +105,7 @@ pub enum GuiEvent {
         items: Vec<crate::chat::StickerItem>,
     },
     StickerSuggestKeywordsLoaded(Vec<String>),
+    ConvLabelsLoaded(Result<Vec<crate::chat::ConvLabel>, String>),
     /// Results for `WorkerCmd::SearchGifs` with the same `seq`.
     GifResults {
         seq: u64,
@@ -583,6 +584,18 @@ pub struct ZaloGuiApp {
     forward_tab: u8,
     forward_note: String,
     forward_focus_pending: bool,
+    /// Extra messages shared together with `forward_msg` (multi-select "Chia sẻ").
+    forward_more: Vec<ChatMessage>,
+    /// Multi-select mode: (thread id, selected message keys in selection order).
+    multi_select: Option<(String, Vec<String>)>,
+    /// Message shown in the "Xem chi tiết" dialog.
+    message_details: Option<ChatMessage>,
+    /// Share dialog "Phân loại" filter: selected label ids and dropdown state.
+    forward_label_filter: Vec<i64>,
+    forward_label_menu_open: bool,
+    /// Conversation labels from the account (fetched on demand).
+    conv_labels: Vec<crate::chat::ConvLabel>,
+    conv_labels_loading: bool,
     /// (thread id, message id) whose reaction list is open.
     reactions_dialog: Option<(String, String)>,
     /// Selected reaction type tab in that dialog (None = all).
@@ -856,6 +869,13 @@ impl ZaloGuiApp {
             forward_tab: 0,
             forward_note: String::new(),
             forward_focus_pending: false,
+            forward_more: Vec::new(),
+            multi_select: None,
+            message_details: None,
+            forward_label_filter: Vec::new(),
+            forward_label_menu_open: false,
+            conv_labels: Vec::new(),
+            conv_labels_loading: false,
             reactions_dialog: None,
             reactions_tab: None,
             filter_starred_only: false,
@@ -1690,6 +1710,12 @@ impl ZaloGuiApp {
                 GuiEvent::StickerSuggestKeywordsLoaded(kws) => {
                     for k in kws {
                         self.sticker_suggest_keywords.insert(k);
+                    }
+                }
+                GuiEvent::ConvLabelsLoaded(res) => {
+                    self.conv_labels_loading = false;
+                    if let Ok(labels) = res {
+                        self.conv_labels = labels;
                     }
                 }
                 GuiEvent::GifResults { seq, items, error } => {

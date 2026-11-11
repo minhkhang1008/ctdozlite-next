@@ -377,6 +377,7 @@ impl ZaloGuiApp {
             self.render_wipe_confirm(ctx, pal);
             self.render_toast_overlay(ctx, pal);
             self.render_forward_dialog(ctx, pal);
+            self.render_message_details(ctx, pal);
             self.render_reactions_dialog(ctx, pal);
             self.render_call_overlay(ctx, pal);
             self.render_image_viewer_modal(ctx, pal);
@@ -3649,6 +3650,17 @@ impl ZaloGuiApp {
                         68.0 + composer_extra_h + picker_reserve
                     };
                     let msg_area_height = (ui.available_height() - bottom_stack_h).max(100.0);
+                    // Multi-select state for the bubbles (see `messages::multi_select_overlay`).
+                    if self.multi_select.as_ref().is_some_and(|(tid, _)| tid != &thread_id) {
+                        self.multi_select = None;
+                    }
+                    {
+                        let keys = self.multi_select.as_ref().map(|(_, k)| k.clone());
+                        ctx.data_mut(|d| {
+                            d.insert_temp(Id::new(MULTI_SELECT_ACTIVE), keys.is_some());
+                            d.insert_temp(Id::new(MULTI_SELECT_KEYS), keys.unwrap_or_default());
+                        });
+                    }
                     let chat_scroll_out = egui::ScrollArea::vertical()
                         .id_salt(Id::new(("chat_scroll", &thread_id)))
                         .max_height(msg_area_height)
@@ -4019,12 +4031,24 @@ impl ZaloGuiApp {
                                     }
                                 }
                                 BubbleAction::Forward => {
-                                    self.forward_msg = Some(m);
-                                    self.forward_filter.clear();
-                                    self.forward_selected.clear();
-                                    self.forward_note.clear();
-                                    self.forward_tab = 0;
-                                    self.forward_focus_pending = true;
+                                    self.open_share_dialog(vec![m]);
+                                }
+                                BubbleAction::StartMultiSelect => {
+                                    self.multi_select =
+                                        Some((thread_id.clone(), vec![message_key(&m)]));
+                                }
+                                BubbleAction::ToggleSelect => {
+                                    let key = message_key(&m);
+                                    if let Some((_, keys)) = self.multi_select.as_mut() {
+                                        if let Some(pos) = keys.iter().position(|k| k == &key) {
+                                            keys.remove(pos);
+                                        } else {
+                                            keys.push(key);
+                                        }
+                                    }
+                                }
+                                BubbleAction::ShowDetails => {
+                                    self.message_details = Some(m);
                                 }
                                 BubbleAction::ShowReactions => {
                                     self.reactions_dialog = Some((thread_id.clone(), m.id.clone()));
@@ -4389,6 +4413,9 @@ impl ZaloGuiApp {
                         }
                     }
 
+                    // 3c-1. Multi-select action bar ("n Đã chọn · Sao chép · Chia sẻ · Xóa · Hủy")
+                    self.render_multi_select_bar(ui, &thread_id, is_group, pal);
+
                     // 3c-2. Dropped files waiting to be sent ("Xem trước khi gửi" zone)
                     self.render_pending_drop_files(ui, pal);
 
@@ -4477,6 +4504,11 @@ impl ZaloGuiApp {
                                 }
                                 self.composer_focus_pending = true;
                             }
+                            if self.multi_select.is_some()
+                                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+                            {
+                                self.multi_select = None;
+                            }
                             if gif_mode
                                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
                             {
@@ -4488,6 +4520,7 @@ impl ZaloGuiApp {
                             let modal_open = self.image_viewer.is_some()
                                 || self.reactions_dialog.is_some()
                                 || self.forward_msg.is_some()
+                                || self.message_details.is_some()
                                 || self.settings_modal_open
                                 || self.schedule_modal_open
                                 || self.phone_modal_open
@@ -5400,6 +5433,7 @@ impl ZaloGuiApp {
         self.render_wipe_confirm(ctx, pal);
         self.render_toast_overlay(ctx, pal);
         self.render_forward_dialog(ctx, pal);
+        self.render_message_details(ctx, pal);
         self.render_reactions_dialog(ctx, pal);
         self.render_call_overlay(ctx, pal);
         self.render_image_viewer_modal(ctx, pal);
@@ -6320,6 +6354,167 @@ impl ZaloGuiApp {
             st.cursor
                 .set_char_range(Some(egui::text::CCursorRange::one(end)));
             st.store(ctx, composer_id);
+        }
+    }
+
+    /// Open the "Chia sẻ" dialog for one or more messages (multi-select shares several).
+    pub(super) fn open_share_dialog(&mut self, mut msgs: Vec<ChatMessage>) {
+        if msgs.is_empty() {
+            return;
+        }
+        self.forward_msg = Some(msgs.remove(0));
+        self.forward_more = msgs;
+        self.forward_filter.clear();
+        self.forward_selected.clear();
+        self.forward_note.clear();
+        self.forward_tab = 0;
+        self.forward_focus_pending = true;
+        self.forward_label_filter.clear();
+        self.forward_label_menu_open = false;
+        if self.conv_labels.is_empty() && !self.conv_labels_loading {
+            if let Some(tx) = WORKER_TX.get() {
+                self.conv_labels_loading = true;
+                let _ = tx.send(WorkerCmd::FetchConvLabels);
+            }
+        }
+    }
+
+    /// Selected messages of the current thread, in conversation order.
+    fn multi_selected_messages(&self) -> Vec<ChatMessage> {
+        let Some((_, keys)) = self.multi_select.as_ref() else {
+            return Vec::new();
+        };
+        self.threads
+            .get(self.selected_thread_index)
+            .map(|t| {
+                t.messages
+                    .iter()
+                    .filter(|m| keys.contains(&message_key(m)))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Zalo-style bar above the composer while selecting several messages.
+    fn render_multi_select_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        thread_id: &str,
+        is_group: bool,
+        pal: &ThemePalette,
+    ) {
+        let Some(count) = self.multi_select.as_ref().map(|(_, k)| k.len()) else {
+            return;
+        };
+        let mut copy = false;
+        let mut share = false;
+        let mut delete = false;
+        let mut cancel = false;
+        egui::Frame::none()
+            .fill(pal.bg_sidebar)
+            .stroke(Stroke::new(1.0_f32, pal.border))
+            .inner_margin(Margin::symmetric(14.0, 8.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    egui::Frame::none()
+                        .fill(pal.primary)
+                        .rounding(Rounding::same(4.0))
+                        .inner_margin(Margin::symmetric(7.0, 2.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(count.to_string())
+                                    .size(13.0)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                        });
+                    ui.label(RichText::new("Đã chọn").size(14.0).color(pal.text_primary));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Hủy").size(14.0).color(pal.text_primary),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_cursor(CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            cancel = true;
+                        }
+                        let enabled = count > 0;
+                        let pill = |icon: &str, label: &str, fill: Color32, fg: Color32| {
+                            egui::Button::new(
+                                RichText::new(format!("{icon} {label}"))
+                                    .size(13.5)
+                                    .color(fg),
+                            )
+                            .fill(fill)
+                            .rounding(Rounding::same(14.0))
+                            .min_size(Vec2::new(0.0, 28.0))
+                        };
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                pill(lucide::TRASH_2, "Xóa", pal.danger, Color32::WHITE),
+                            )
+                            .on_hover_text("Xóa chỉ ở phía tôi")
+                            .clicked()
+                        {
+                            delete = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                pill(lucide::FORWARD, "Chia sẻ", pal.bg_hover, pal.text_primary),
+                            )
+                            .clicked()
+                        {
+                            share = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                pill(lucide::COPY, "Sao chép", pal.bg_hover, pal.text_primary),
+                            )
+                            .clicked()
+                        {
+                            copy = true;
+                        }
+                    });
+                });
+            });
+        if copy {
+            let msgs = self.multi_selected_messages();
+            let text = msgs
+                .iter()
+                .map(message_copy_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.ctx().copy_text(text);
+            self.show_toast(format!("Đã sao chép {} tin nhắn", msgs.len()));
+            self.multi_select = None;
+        } else if share {
+            let msgs = self.multi_selected_messages();
+            self.multi_select = None;
+            self.open_share_dialog(msgs);
+        } else if delete {
+            let msgs = self.multi_selected_messages();
+            if let Some(tx) = WORKER_TX.get() {
+                for msg in msgs.iter().cloned() {
+                    let _ = tx.send(WorkerCmd::DeleteForMe {
+                        to_id: thread_id.to_string(),
+                        is_group,
+                        msg,
+                    });
+                }
+            }
+            self.show_toast(format!("Đã xóa {} tin nhắn ở phía bạn", msgs.len()));
+            self.multi_select = None;
+        } else if cancel {
+            self.multi_select = None;
         }
     }
 

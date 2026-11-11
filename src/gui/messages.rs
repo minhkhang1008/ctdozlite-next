@@ -2904,6 +2904,9 @@ pub(super) fn render_chat_bubble(
                             }
                         });
                     });
+                if let Some(selecting) = multi_select_overlay(ui, &fr.response, msg, pal) {
+                    return selecting;
+                }
                 if fr.response.double_clicked() {
                     return Some(BubbleAction::Reply);
                 }
@@ -3046,6 +3049,9 @@ pub(super) fn render_chat_bubble(
                             }
                         });
                     });
+                if let Some(selecting) = multi_select_overlay(ui, &fr.response, msg, pal) {
+                    return selecting;
+                }
                 if fr.response.double_clicked() {
                     return Some(BubbleAction::Reply);
                 }
@@ -3077,6 +3083,12 @@ pub(super) fn render_chat_bubble(
 #[derive(Clone, PartialEq)]
 pub(super) enum BubbleAction {
     Reply,
+    /// Enter multi-select mode with this message selected.
+    StartMultiSelect,
+    /// Toggle this message while in multi-select mode.
+    ToggleSelect,
+    /// Open the message details dialog.
+    ShowDetails,
     #[allow(dead_code)]
     Mention(String),
     JumpToQuoted(String),
@@ -3116,6 +3128,71 @@ fn menu_item(ui: &mut egui::Ui, icon: &str, label: &str, text_color: Color32) ->
     let response = ui.add(btn);
     response.surrender_focus();
     response
+}
+
+/// egui temp-data keys carrying the multi-select state from the workspace into bubbles.
+pub(super) const MULTI_SELECT_ACTIVE: &str = "multi_select_active";
+pub(super) const MULTI_SELECT_KEYS: &str = "multi_select_keys";
+
+/// Stable per-message key used by menus and multi-select (`<id>_<ts>`).
+pub(super) fn message_key(msg: &ChatMessage) -> String {
+    format!("{}_{}", msg.id, msg.ts)
+}
+
+/// In multi-select mode the whole bubble becomes a toggle: selected bubbles get a tinted
+/// overlay, an accent border and a check badge on their outer side. Returns `Some(action)`
+/// (possibly `None` inside) while the mode is active so normal bubble interactions are skipped.
+fn multi_select_overlay(
+    ui: &mut egui::Ui,
+    bubble: &egui::Response,
+    msg: &ChatMessage,
+    pal: &ThemePalette,
+) -> Option<Option<BubbleAction>> {
+    let active: bool = ui
+        .ctx()
+        .data(|d| d.get_temp(Id::new(MULTI_SELECT_ACTIVE)))
+        .unwrap_or(false);
+    if !active {
+        return None;
+    }
+    let key = message_key(msg);
+    let selected = ui.ctx().data(|d| {
+        d.get_temp::<Vec<String>>(Id::new(MULTI_SELECT_KEYS))
+            .is_some_and(|keys| keys.contains(&key))
+    });
+    let rect = bubble.rect;
+    let resp = ui
+        .interact(rect, Id::new(("multi_select_bubble", &key)), Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand);
+    let painter = ui.painter();
+    if selected {
+        painter.rect_filled(rect, Rounding::same(6.0), pal.primary.linear_multiply(0.18));
+        painter.rect_stroke(rect, Rounding::same(6.0), Stroke::new(2.0_f32, pal.primary));
+    } else if resp.hovered() {
+        painter.rect_stroke(
+            rect,
+            Rounding::same(6.0),
+            Stroke::new(1.0_f32, pal.text_muted),
+        );
+    }
+    let badge = if msg.is_outgoing {
+        Pos2::new(rect.left() - 18.0, rect.center().y)
+    } else {
+        Pos2::new(rect.right() + 18.0, rect.center().y)
+    };
+    if selected {
+        painter.circle_filled(badge, 9.0, pal.primary);
+        painter.text(
+            badge,
+            egui::Align2::CENTER_CENTER,
+            lucide::CHECK,
+            FontId::proportional(11.0),
+            Color32::WHITE,
+        );
+    } else {
+        painter.circle_stroke(badge, 9.0, Stroke::new(1.5_f32, pal.text_muted));
+    }
+    Some(resp.clicked().then_some(BubbleAction::ToggleSelect))
 }
 
 /// Diameter of one hover action button (Zalo PC: 28px circles beside the bubble).
@@ -3463,7 +3540,15 @@ pub(super) fn bubble_context_menu(
                 }
 
                 // 3. Copy tin nhắn
-                if menu_item(ui, lucide::COPY, "Copy tin nhắn", pal.text_primary).clicked() {
+                let is_link = msg.link_url.as_deref().is_some_and(|u| !u.is_empty())
+                    && !is_zalo_photo_message(msg)
+                    && !is_zalo_file_or_video_message(msg);
+                let copy_label = if is_link {
+                    "Copy link"
+                } else {
+                    "Copy tin nhắn"
+                };
+                if menu_item(ui, lucide::COPY, copy_label, pal.text_primary).clicked() {
                     ui.ctx().copy_text(message_copy_text(msg));
                     close_menu = true;
                 }
@@ -3490,6 +3575,22 @@ pub(super) fn bubble_context_menu(
                 };
                 if menu_item(ui, lucide::STAR, star_label, pal.text_primary).clicked() {
                     action = Some(BubbleAction::ToggleStar);
+                    close_menu = true;
+                }
+
+                if menu_item(
+                    ui,
+                    lucide::CHECK_CHECK,
+                    "Chọn nhiều tin nhắn",
+                    pal.text_primary,
+                )
+                .clicked()
+                {
+                    action = Some(BubbleAction::StartMultiSelect);
+                    close_menu = true;
+                }
+                if menu_item(ui, lucide::INFO, "Xem chi tiết", pal.text_primary).clicked() {
+                    action = Some(BubbleAction::ShowDetails);
                     close_menu = true;
                 }
 

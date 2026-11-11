@@ -3550,6 +3550,110 @@ pub async fn search_stickers_by_keyword(s: &Session, keyword: &str) -> Result<Ve
     Ok(out)
 }
 
+/// A conversation label ("Phân loại") defined in the user's Zalo account.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConvLabel {
+    pub id: i64,
+    pub text: String,
+    /// `#RRGGBB` as sent by Zalo (may be empty).
+    pub color: String,
+    /// Conversation ids: `"<uid>"` for 1-1, `"g<groupId>"` for groups.
+    pub conversations: Vec<String>,
+}
+
+impl ConvLabel {
+    /// Whether this label is attached to the thread `thread_id` (app ids carry no `g` prefix).
+    pub fn contains(&self, thread_id: &str, is_group: bool) -> bool {
+        self.conversations.iter().any(|c| {
+            let c = c.trim();
+            if is_group {
+                c.strip_prefix('g') == Some(thread_id)
+            } else {
+                !c.starts_with('g') && c == thread_id
+            }
+        })
+    }
+}
+
+/// Parse `labelData` (a JSON string or array/object, ordered by `offset`) from
+/// `GET {label}/api/convlabel/get`. Same shape as the web client's `convertData`.
+pub fn parse_conv_labels(resp: &Value) -> Vec<ConvLabel> {
+    let data = resp.get("data").unwrap_or(resp);
+    let raw = data.get("labelData").cloned().unwrap_or(Value::Null);
+    let parsed = match raw {
+        Value::String(s) => serde_json::from_str::<Value>(&s).unwrap_or(Value::Null),
+        other => other,
+    };
+    let items: Vec<Value> = match parsed {
+        Value::Array(a) => a,
+        Value::Object(o) => o.into_iter().map(|(_, v)| v).collect(),
+        _ => Vec::new(),
+    };
+    let mut out: Vec<(i64, ConvLabel)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, it)| {
+            let id = it.get("id").and_then(Value::as_i64)?;
+            let text = it
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+                .or_else(|| it.get("textKey").and_then(Value::as_str))
+                .unwrap_or("")
+                .chars()
+                .take(40)
+                .collect::<String>();
+            let offset = it.get("offset").and_then(Value::as_i64).unwrap_or(i as i64);
+            Some((
+                offset,
+                ConvLabel {
+                    id,
+                    text,
+                    color: it
+                        .get("color")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    conversations: it
+                        .get("conversations")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| match c {
+                                    Value::String(s) => Some(s.clone()),
+                                    Value::Number(n) => Some(n.to_string()),
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
+            ))
+        })
+        .collect();
+    out.sort_by_key(|(o, _)| *o);
+    out.into_iter().map(|(_, l)| l).collect()
+}
+
+/// Read the account's conversation labels (`getConversationLabel`, cmd 12161). Read-only.
+pub async fn fetch_conv_labels(s: &Session) -> Result<Vec<ConvLabel>> {
+    let host = crate::endpoints::service("label").unwrap_or_default();
+    let body = obj(&[("imei", json!(s.imei))]);
+    let url = format!(
+        "{host}/api/convlabel/get?{}&params={}",
+        s.common_params(),
+        s.encoded_params(&body)?
+    );
+    let resp = s.get(&url).await?;
+    let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
+    if let Some(code) = dec.get("error_code").and_then(Value::as_i64) {
+        if code != 0 {
+            anyhow::bail!("convlabel/get error {code}");
+        }
+    }
+    Ok(parse_conv_labels(&dec))
+}
+
 /// One Giphy result as served by Zalo's GIF service (`data.data_list[]`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GifItem {
@@ -9170,6 +9274,21 @@ mod message_state_defaults_tests {
 #[cfg(test)]
 mod send_identity_tests {
     use super::*;
+
+    #[test]
+    fn conv_labels_parse_string_payload_and_match_threads() {
+        let resp = json!({"error_code":0,"data":{"version":3,"labelData":
+            "[{\"id\":2,\"text\":\"bạn bè\",\"color\":\"#FFC107\",\"offset\":1,\"conversations\":[\"111\"]},\
+              {\"id\":1,\"text\":\"gia đình\",\"color\":\"#4BC3B2\",\"offset\":0,\"conversations\":[\"g222\",\"333\"]}]"}});
+        let labels = parse_conv_labels(&resp);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].text, "gia đình", "ordered by offset");
+        assert!(labels[0].contains("222", true));
+        assert!(!labels[0].contains("222", false));
+        assert!(labels[0].contains("333", false));
+        assert!(labels[1].contains("111", false));
+        assert!(!labels[1].contains("111", true));
+    }
 
     #[test]
     fn parse_gif_list_reads_original_and_normal_renditions() {

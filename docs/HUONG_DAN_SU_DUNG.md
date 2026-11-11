@@ -45,6 +45,9 @@ Trên macOS, bản `.app` mặc định lưu dữ liệu trong `~/Library/Applic
 - **Tương tác trên tin nhắn:**
   - Nhấp chuột phải vào bong bóng tin nhắn để thả cảm xúc (reaction), trả lời trích dẫn, chuyển tiếp, sao chép nội dung, ghim, đánh dấu sao, thu hồi tin nhắn với mọi người hoặc xóa ở phía cá nhân.
   - **Nhấp đúp** vào một tin nhắn để trả lời nhanh. Trong nhóm, ô soạn tin tự chèn `@Tên` người gửi ở đầu (có thể xoá như tag thường). Nhấn `Esc` hoặc nút `✕` để thoát chế độ trả lời.
+  - Rê chuột vào một tin nhắn để hiện 3 nút: **Trả lời**, **Chia sẻ** và **…** (Copy, Ghim, Đánh dấu, Chọn nhiều tin nhắn, Xem chi tiết, Tuỳ chọn khác, Thu hồi, Xóa chỉ ở phía tôi).
+  - **Chia sẻ:** tìm hoặc lọc theo tab / **Phân loại**, tick nhiều hội thoại, thêm lời nhắn nếu muốn, bấm **Chia sẻ**.
+  - **Chọn nhiều tin nhắn:** bấm vào từng tin để chọn, rồi dùng thanh phía trên ô soạn tin để Sao chép / Chia sẻ / Xóa; `Esc` hoặc **Hủy** để thoát.
   - Rê chuột vào cảm xúc dưới tin nhắn để xem tên người đã thả; bấm vào để mở hộp thoại **Biểu cảm** (lọc theo từng loại cảm xúc).
 - **Nhắc tên (@mention) trong nhóm:** gõ `@` để mở danh sách thành viên, dùng `↑`/`↓` để chọn, `Tab`/`Enter` để chèn, `Esc` để đóng. Tag hiển thị màu xanh và người được tag sẽ nhận thông báo.
 - **Tìm và gửi GIF:** gõ `@gif` để xem GIF xu hướng, hoặc `@gif <từ khoá>` (ví dụ `@gif hello`) để tìm. Dùng phím mũi tên để chọn, `Enter` để gửi, `Esc` để đóng; bấm chuột vào GIF cũng gửi ngay. Bật/tắt ở **Cài đặt → Tiện ích → Gợi ý @ → Tìm kiếm GIF**.

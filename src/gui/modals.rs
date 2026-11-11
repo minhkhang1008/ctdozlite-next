@@ -6067,6 +6067,12 @@ impl ZaloGuiApp {
             .filter(|t| {
                 query.is_empty() || crate::chat::strip_vn_for_sticker_kw(&t.name).contains(&query)
             })
+            .filter(|t| {
+                self.forward_label_filter.is_empty()
+                    || self.conv_labels.iter().any(|l| {
+                        self.forward_label_filter.contains(&l.id) && l.contains(&t.id, t.is_group)
+                    })
+            })
             .take(300)
             .map(|t| {
                 let blocked = t.is_group && t.presentation.posting_restricted == Some(true);
@@ -6081,7 +6087,14 @@ impl ZaloGuiApp {
             .collect();
 
         // What is being shared.
-        let (kind_label, detail, thumb_url) = if fwd.sticker_id.is_some() {
+        let extra = self.forward_more.len();
+        let (kind_label, detail, thumb_url) = if extra > 0 {
+            (
+                format!("{} tin nhắn", extra + 1),
+                fwd.text.split_whitespace().collect::<Vec<_>>().join(" "),
+                None,
+            )
+        } else if fwd.sticker_id.is_some() {
             ("Nhãn dán".to_string(), String::new(), None)
         } else if is_zalo_photo_message(&fwd) {
             (
@@ -6213,6 +6226,99 @@ impl ZaloGuiApp {
                                         self.forward_tab = i as u8;
                                     }
                                 }
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let n = self.forward_label_filter.len();
+                                    let label = if n > 0 {
+                                        format!("Phân loại ({n}) {}", lucide::CHEVRON_DOWN)
+                                    } else {
+                                        format!("Phân loại {}", lucide::CHEVRON_DOWN)
+                                    };
+                                    let btn = ui
+                                        .add(
+                                            egui::Button::new(RichText::new(label).size(13.5).color(
+                                                if n > 0 || self.forward_label_menu_open {
+                                                    pal.primary_hover
+                                                } else {
+                                                    pal.text_primary
+                                                },
+                                            ))
+                                            .fill(if self.forward_label_menu_open {
+                                                pal.primary.linear_multiply(0.15)
+                                            } else {
+                                                Color32::TRANSPARENT
+                                            })
+                                            .rounding(Rounding::same(6.0)),
+                                        )
+                                        .on_hover_cursor(CursorIcon::PointingHand);
+                                    if btn.clicked() {
+                                        self.forward_label_menu_open = !self.forward_label_menu_open;
+                                    }
+                                    if self.forward_label_menu_open {
+                                        let anchor = btn.rect.right_bottom() + Vec2::new(0.0, 6.0);
+                                        let area = egui::Area::new(Id::new("forward_label_menu"))
+                                            .order(egui::Order::Tooltip)
+                                            .pivot(egui::Align2::RIGHT_TOP)
+                                            .fixed_pos(anchor)
+                                            .show(ui.ctx(), |ui| {
+                                                egui::Frame::none()
+                                                    .fill(pal.bg_elevated)
+                                                    .stroke(Stroke::new(1.0_f32, pal.border))
+                                                    .rounding(Rounding::same(6.0))
+                                                    .inner_margin(Margin::same(6.0))
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(220.0);
+                                                        if self.conv_labels.is_empty() {
+                                                            ui.label(
+                                                                RichText::new(if self.conv_labels_loading {
+                                                                    "Đang tải phân loại…"
+                                                                } else {
+                                                                    "Chưa có phân loại nào"
+                                                                })
+                                                                .size(13.0)
+                                                                .color(pal.text_muted),
+                                                            );
+                                                        }
+                                                        for l in &self.conv_labels {
+                                                            let (r, resp) = ui.allocate_exact_size(Vec2::new(220.0, 36.0), Sense::click());
+                                                            if resp.hovered() {
+                                                                ui.painter().rect_filled(r, Rounding::same(4.0), pal.bg_hover);
+                                                            }
+                                                            let on = self.forward_label_filter.contains(&l.id);
+                                                            let box_r = Rect::from_center_size(Pos2::new(r.left() + 16.0, r.center().y), Vec2::splat(16.0));
+                                                            if on {
+                                                                ui.painter().rect_filled(box_r, Rounding::same(3.0), pal.primary);
+                                                                ui.painter().text(box_r.center(), egui::Align2::CENTER_CENTER, lucide::CHECK, FontId::proportional(12.0), Color32::WHITE);
+                                                            } else {
+                                                                ui.painter().rect_stroke(box_r, Rounding::same(3.0), Stroke::new(1.5_f32, pal.text_muted));
+                                                            }
+                                                            let tag = Rect::from_center_size(Pos2::new(r.left() + 46.0, r.center().y), Vec2::new(18.0, 12.0));
+                                                            ui.painter().rect_filled(tag, Rounding::same(3.0), parse_hex_color({ let h = l.color.trim().trim_start_matches('#'); if h.len() == 8 && h.is_ascii() { &h[2..] } else { h } }).unwrap_or(pal.primary));
+                                                            ui.painter().text(
+                                                                Pos2::new(r.left() + 66.0, r.center().y),
+                                                                egui::Align2::LEFT_CENTER,
+                                                                &l.text,
+                                                                FontId::proportional(14.0),
+                                                                pal.text_primary,
+                                                            );
+                                                            if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                                                if on {
+                                                                    self.forward_label_filter.retain(|x| *x != l.id);
+                                                                } else {
+                                                                    self.forward_label_filter.push(l.id);
+                                                                }
+                                                            }
+                                                        }
+                                                    });
+                                            });
+                                        let clicked_out = ui.ctx().input(|i| i.pointer.any_pressed())
+                                            && ui.ctx().input(|i| i.pointer.interact_pos()).is_some_and(|p| {
+                                                !area.response.rect.contains(p) && !btn.rect.contains(p)
+                                            });
+                                        if clicked_out {
+                                            self.forward_label_menu_open = false;
+                                        }
+                                    }
+                                });
                             });
                             ui.add_space(4.0);
                             ui.separator();
@@ -6368,15 +6474,21 @@ impl ZaloGuiApp {
             let targets = std::mem::take(&mut self.forward_selected);
             let note = std::mem::take(&mut self.forward_note);
             let note = (!note.trim().is_empty()).then(|| note.trim().to_string());
+            let mut msgs = vec![fwd.clone()];
+            msgs.extend(std::mem::take(&mut self.forward_more));
             if let Some(tx) = WORKER_TX.get() {
                 for (target_id, target_is_group, target_name) in &targets {
-                    let _ = tx.send(WorkerCmd::Forward {
-                        target_id: target_id.clone(),
-                        target_is_group: *target_is_group,
-                        msg: fwd.clone(),
-                        target_name: target_name.clone(),
-                        note: note.clone(),
-                    });
+                    for (i, msg) in msgs.iter().enumerate() {
+                        let last = i + 1 == msgs.len();
+                        let _ = tx.send(WorkerCmd::Forward {
+                            target_id: target_id.clone(),
+                            target_is_group: *target_is_group,
+                            msg: msg.clone(),
+                            target_name: target_name.clone(),
+                            // The note follows the last shared message only.
+                            note: if last { note.clone() } else { None },
+                        });
+                    }
                 }
             }
             let msg = if targets.len() == 1 {
@@ -6390,8 +6502,167 @@ impl ZaloGuiApp {
             ctx.request_repaint();
         } else if !open {
             self.forward_msg = None;
+            self.forward_more.clear();
             self.forward_selected.clear();
             self.forward_note.clear();
+        }
+    }
+
+    /// "Xem chi tiết": sender, full time, type, delivery state, reactions and message id.
+    pub(super) fn render_message_details(&mut self, ctx: &egui::Context, pal: &ThemePalette) {
+        let Some(msg) = self.message_details.clone() else {
+            return;
+        };
+        let mut open = !ctx.input(|i| i.key_pressed(Key::Escape));
+        let sender = if msg.is_outgoing {
+            "Bạn".to_string()
+        } else {
+            msg.sender.clone()
+        };
+        let when = chrono::DateTime::from_timestamp_millis(msg.ts)
+            .map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%H:%M:%S · %d/%m/%Y")
+                    .to_string()
+            })
+            .unwrap_or_else(|| msg.time.clone());
+        let kind = if msg.sticker_id.is_some() {
+            "Nhãn dán"
+        } else if msg.text == "[GIF]" {
+            "GIF"
+        } else if is_zalo_photo_message(&msg) {
+            "Hình ảnh"
+        } else if is_zalo_file_or_video_message(&msg) {
+            "Tập tin / video"
+        } else if msg.link_url.as_deref().is_some_and(|u| !u.is_empty()) {
+            "Liên kết"
+        } else {
+            "Văn bản"
+        };
+        let status = if msg.is_outgoing {
+            match msg.delivery {
+                crate::message_model::DeliveryState::Read => "Đã xem",
+                crate::message_model::DeliveryState::Delivered => "Đã nhận",
+                crate::message_model::DeliveryState::ServerAccepted => "Đã gửi",
+                crate::message_model::DeliveryState::Pending => "Đang gửi",
+                crate::message_model::DeliveryState::Failed => "Gửi lỗi",
+                _ => "Đã gửi",
+            }
+        } else {
+            "Đã nhận"
+        };
+        let reactions: u64 = msg.reaction_summaries.iter().map(|r| r.count).sum();
+        let rows: Vec<(&str, String)> = vec![
+            ("Người gửi", sender),
+            ("Thời gian", when),
+            ("Loại tin nhắn", kind.to_string()),
+            ("Trạng thái", status.to_string()),
+            (
+                "Cảm xúc",
+                if reactions > 0 {
+                    format!("{reactions} lượt")
+                } else {
+                    "Chưa có".into()
+                },
+            ),
+            ("Mã tin nhắn", msg.id.clone()),
+        ];
+        egui::Area::new(Id::new("message_details_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(ctx.screen_rect().min)
+            .show(ctx, |ui| {
+                let (r, resp) = ui.allocate_exact_size(ctx.screen_rect().size(), Sense::click());
+                ui.painter().rect_filled(
+                    r,
+                    Rounding::ZERO,
+                    Color32::from_black_alpha(if pal.is_dark { 150 } else { 90 }),
+                );
+                if resp.clicked() {
+                    open = false;
+                }
+            });
+        egui::Area::new(Id::new("message_details_card"))
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(pal.bg_sidebar)
+                    .stroke(Stroke::new(1.0_f32, pal.border))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::same(18.0))
+                    .show(ui, |ui| {
+                        ui.set_width(380.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Chi tiết tin nhắn")
+                                    .size(16.0)
+                                    .strong()
+                                    .color(pal.text_primary),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new(lucide::X)
+                                                .size(16.0)
+                                                .color(pal.text_primary),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    open = false;
+                                }
+                            });
+                        });
+                        ui.add_space(10.0);
+                        let preview = msg.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        if !preview.is_empty() {
+                            egui::Frame::none()
+                                .fill(pal.bg_input)
+                                .rounding(Rounding::same(6.0))
+                                .inner_margin(Margin::same(10.0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(truncate_chars(&preview, 160))
+                                                .size(13.0)
+                                                .color(pal.text_secondary),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            ui.add_space(10.0);
+                        }
+                        egui::Grid::new("message_details_grid")
+                            .num_columns(2)
+                            .spacing([16.0, 8.0])
+                            .show(ui, |ui| {
+                                for (k, v) in &rows {
+                                    ui.label(RichText::new(*k).size(13.0).color(pal.text_muted));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(v).size(13.5).color(pal.text_primary),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(format!("{} Sao chép mã tin nhắn", lucide::COPY))
+                                .clicked()
+                            {
+                                ui.ctx().copy_text(msg.id.clone());
+                            }
+                        });
+                    });
+            });
+        if !open {
+            self.message_details = None;
         }
     }
 

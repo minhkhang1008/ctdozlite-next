@@ -89,6 +89,8 @@ pub enum WorkerCmd {
         sticker_type: u32,
         is_group: bool,
     },
+    /// Read the account's conversation labels ("Phân loại").
+    FetchConvLabels,
     /// GIF search for the composer `@gif` command; an empty query means trending.
     SearchGifs {
         query: String,
@@ -2568,6 +2570,22 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                         )));
                                     }
                                 }
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        WorkerCmd::FetchConvLabels => {
+                            let session_clone = session.clone();
+                            let gui_tx_clone = gui_tx.clone();
+                            let ctx_clone = egui_ctx.clone();
+                            tokio::spawn(async move {
+                                let s = session_clone.lock().await.clone();
+                                let res = crate::chat::fetch_conv_labels(&s)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                if let Err(ref e) = res {
+                                    crate::logger::log_error("chat::fetch_conv_labels", e);
+                                }
+                                let _ = gui_tx_clone.send(GuiEvent::ConvLabelsLoaded(res));
                                 ctx_clone.request_repaint();
                             });
                         }

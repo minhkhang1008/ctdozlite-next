@@ -51,8 +51,9 @@ bash packaging/package-local.sh            # → dist/ctdozlite-<phiên bản>-m
 
 ## Phát hành phiên bản mới
 
-CI (`.github/workflows/ci-release.yml`) chạy test trên mỗi lần push vào `main`. Khi bạn đẩy một tag
-`v*`, CI dựng gói cho macOS/Windows/Linux rồi tự tạo bản Release.
+CI (`.github/workflows/ci-release.yml`) chỉ chạy test (~2 phút) khi push vào `main`, và bỏ qua hoàn
+toàn nếu commit chỉ sửa tài liệu. Khi bạn đẩy một tag `v*`, CI dựng gói cho macOS/Windows/Linux
+(~10–25 phút) rồi tự tạo bản Release; app đang cài sẽ tự nhận bản mới.
 
 1. Nâng `version` trong `Cargo.toml` (ví dụ `0.2.0`), chạy `cargo check` để cập nhật `Cargo.lock`.
 2. Trong `CHANGELOG.md`, đổi `## [Unreleased]` thành `## [0.2.0] - <ngày>` và thêm một mục

@@ -635,3 +635,44 @@ Entry template:
   running GUI (no live session available here): hover bar, menus, share dialog, reply layout,
   colours. The macOS in-place update is untested end to end; it needs a newer release (v0.2.1+)
   installed over v0.2.x.
+
+## 2026-11-12 — Faster CI; BrowserSkill pass: multi-select, message details, share "Phân loại", "Copy link"  (agent: Claude Code, claude-opus-5-5)
+
+- Request: apply the CI speed-up, re-run BrowserSkill and do what was skipped last time.
+- CI (`ci-release.yml`): the four installer jobs now run only for `v*` tags, workflow_dispatch,
+  or PRs labelled `ci:full-package`. A push to main runs just `test`. `paths-ignore`
+  (`**.md`, `docs/**`, `.agents/**`, `re-notes/**`, `LICENSE-*`) skips docs-only pushes and PRs
+  (path filters do not apply to tags). YAML validated.
+- BrowserSkill (My Documents only, nothing sent or deleted): this time the tab activated. Observed:
+  - Hover bar = quote / forward / "Thêm" (bottom-aligned, left of own bubble), plus a reaction
+    row.
+  - The "…" menu on an own link message in My Documents = Copy link / Đánh dấu tin nhắn /
+    Chọn nhiều tin nhắn / Xóa. It opens upward near the bottom. In groups it also has Ghim,
+    Xem chi tiết and Tuỳ chọn khác (owner's screenshot).
+  - "Chọn nhiều tin nhắn" shows a bar above the composer: "[n] Đã chọn · Sao chép · Chia sẻ ·
+    Xóa (red) · Hủy". Cancelled afterwards.
+  - The share dialog's "Phân loại" is a checkbox dropdown of the account's conversation labels
+    with colour tags. Closed with Hủy.
+- Code:
+  - `chat.rs`: `ConvLabel`, `parse_conv_labels`, `fetch_conv_labels`
+    (`GET label-wpa/api/convlabel/get`, read-only; source evidence in re-notes/40). +1 test.
+  - `worker.rs` `FetchConvLabels` → `GuiEvent::ConvLabelsLoaded`, fetched lazily when the share
+    dialog first opens.
+  - Share dialog: a "Phân loại ▾" dropdown filter (ARGB/RGB colours parsed safely);
+    `forward_more` lets one share carry several messages (the note only follows the last
+    message per target).
+  - `messages.rs`: `BubbleAction::{StartMultiSelect, ToggleSelect, ShowDetails}`;
+    `multi_select_overlay` (temp-data keys `MULTI_SELECT_ACTIVE/KEYS` set by the workspace before
+    the list; when active, each bubble is a toggle with tint, border and check badge, and
+    hover/menus/double-click are skipped). Menus gained "Chọn nhiều tin nhắn" and
+    "Xem chi tiết". Copy is labelled "Copy link" for link messages.
+  - `workspace.rs`: `open_share_dialog`, `multi_selected_messages`, `render_multi_select_bar`
+    (Sao chép joins `message_copy_text`, Chia sẻ opens the dialog with all selected, Xóa sends
+    DeleteForMe for each, Hủy). Esc exits; switching thread clears the selection.
+    `modals.rs::render_message_details`: sender, local full time, type, delivery state,
+    reactions, id + copy.
+  - Docs: CHANGELOG, TINH_NANG, HUONG_DAN, CAI_DAT (CI timing), re-notes/40.
+- Verification: `cargo test --locked` all pass (275 lib); no clippy warnings inside the new
+  functions. rustfmt was run on messages/modals/workspace/chat only. NOT verified in the running
+  GUI. `convlabel/get` is not live-tested (no valid local session); the parser follows the
+  source and zca-js.
