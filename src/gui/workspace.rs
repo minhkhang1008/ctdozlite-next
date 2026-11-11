@@ -1555,9 +1555,9 @@ impl ZaloGuiApp {
                     if self.unread_counts.remove(&tid).is_some() {
                         let total_unread: usize = self.unread_counts.values().sum();
                         let title = if total_unread > 0 {
-                            format!("({total_unread}) Zalo Lite — Native Rust Client")
+                            format!("({total_unread}) {}", crate::APP_DISPLAY_NAME)
                         } else {
-                            "Zalo Lite — Native Rust Client".to_string()
+                            crate::APP_DISPLAY_NAME.to_string()
                         };
                         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                     }
@@ -1657,9 +1657,9 @@ impl ZaloGuiApp {
                             }
                             let total_unread: usize = self.unread_counts.values().sum();
                             let title = if total_unread > 0 {
-                                format!("({total_unread}) Zalo Lite — Native Rust Client")
+                                format!("({total_unread}) {}", crate::APP_DISPLAY_NAME)
                             } else {
-                                "Zalo Lite — Native Rust Client".to_string()
+                                crate::APP_DISPLAY_NAME.to_string()
                             };
                             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                             if let Some(tx) = WORKER_TX.get() {
@@ -3639,11 +3639,16 @@ impl ZaloGuiApp {
                         .count()
                         .clamp(1, 5);
                     let composer_extra_h = if posting_restricted { 0.0 } else { (composer_lines.saturating_sub(1) as f32) * 20.0 };
-                    let msg_area_height = (ui.available_height()
-                        - 68.0
-                        - composer_extra_h
-                        - picker_reserve)
-                        .max(100.0);
+                    // Everything below the message list (sticker drawer, reply / paste / drop /
+                    // schedule banners, typing line, composer) is measured on the previous frame.
+                    // A fixed estimate under-counted the reply banner and pushed the composer
+                    // off-screen. The estimate is only used until the first measurement.
+                    let bottom_stack_h = if self.chat_bottom_stack_h > 0.0 && !posting_restricted {
+                        self.chat_bottom_stack_h
+                    } else {
+                        68.0 + composer_extra_h + picker_reserve
+                    };
+                    let msg_area_height = (ui.available_height() - bottom_stack_h).max(100.0);
                     let chat_scroll_out = egui::ScrollArea::vertical()
                         .id_salt(Id::new(("chat_scroll", &thread_id)))
                         .max_height(msg_area_height)
@@ -4016,6 +4021,10 @@ impl ZaloGuiApp {
                                 BubbleAction::Forward => {
                                     self.forward_msg = Some(m);
                                     self.forward_filter.clear();
+                                    self.forward_selected.clear();
+                                    self.forward_note.clear();
+                                    self.forward_tab = 0;
+                                    self.forward_focus_pending = true;
                                 }
                                 BubbleAction::ShowReactions => {
                                     self.reactions_dialog = Some((thread_id.clone(), m.id.clone()));
@@ -4228,6 +4237,8 @@ impl ZaloGuiApp {
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.vertical(|ui| {
+                                            // Leave room for the ✕ button so the preview truncates.
+                                            ui.set_max_width((ui.available_width() - 44.0).max(80.0));
                                             ui.label(
                                                 RichText::new(format!("Đang trả lời {who}"))
                                                     .size(12.0)
@@ -4237,12 +4248,17 @@ impl ZaloGuiApp {
                                             let preview = if q.sticker_id.is_some() {
                                                 "[Nhãn dán]".to_string()
                                             } else {
-                                                truncate_chars(&q.text, 100).into_owned()
+                                                // One line, like Zalo: collapse newlines/runs of spaces.
+                                                let flat = q.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                                                truncate_chars(&flat, 100).into_owned()
                                             };
-                                            ui.label(
-                                                RichText::new(preview)
-                                                    .size(12.0)
-                                                    .color(pal.text_muted),
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(preview)
+                                                        .size(12.0)
+                                                        .color(pal.text_muted),
+                                                )
+                                                .truncate(),
                                             );
                                         });
                                         ui.with_layout(
@@ -5270,6 +5286,15 @@ impl ZaloGuiApp {
                                     }
                                 });
                         });
+
+                    let measured_bottom = (composer_frame.response.rect.bottom()
+                        - chat_scroll_out.inner_rect.bottom())
+                    .max(0.0)
+                        + ui.spacing().item_spacing.y;
+                    if (measured_bottom - self.chat_bottom_stack_h).abs() > 0.5 {
+                        self.chat_bottom_stack_h = measured_bottom;
+                        ctx.request_repaint();
+                    }
 
                     // 4b. OS file drag & drop: the message area sends at once ("Gửi nhanh"),
                     // the composer zone attaches for review ("Xem trước khi gửi").

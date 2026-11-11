@@ -318,7 +318,7 @@ pub async fn notify(title: &str, body: &str) -> Result<(), NotificationError> {
     let title = sanitize(title, MAX_TITLE_CHARS);
     let body = sanitize(body, MAX_BODY_CHARS);
     let title = if title.is_empty() {
-        "ctdozlite".to_owned()
+        crate::APP_DISPLAY_NAME.to_owned()
     } else {
         title
     };

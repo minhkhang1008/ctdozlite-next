@@ -38,7 +38,11 @@ fn activate_logged_in_account(s: &Session) {
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("ctdozlite v{}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "{} v{}",
+            zalo_rust::APP_DISPLAY_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
         return Ok(());
     }
     if args.iter().any(|a| a == "--check-update") {
@@ -66,11 +70,6 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
-                    updater::notify_os_new_update(
-                        &info.latest_version,
-                        &info.current_version,
-                        &info.release_title,
-                    );
                 } else {
                     println!(
                         "✅ Bạn đang sử dụng phiên bản mới nhất (v{})",
@@ -198,7 +197,7 @@ async fn main() -> Result<()> {
             .with_decorations(false)
             .with_inner_size([1020.0, 700.0])
             .with_min_inner_size([480.0, 360.0])
-            .with_title("ctdozlite");
+            .with_title(zalo_rust::APP_DISPLAY_NAME);
         if let Some(icon) = gui::load_app_icon() {
             viewport = viewport.with_icon(std::sync::Arc::new(icon));
         }

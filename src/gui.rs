@@ -578,6 +578,11 @@ pub struct ZaloGuiApp {
     replying_to: Option<ChatMessage>,
     forward_msg: Option<ChatMessage>,
     forward_filter: String,
+    /// Share dialog: picked targets (id, is_group, name), active tab, optional note.
+    forward_selected: Vec<(String, bool, String)>,
+    forward_tab: u8,
+    forward_note: String,
+    forward_focus_pending: bool,
     /// (thread id, message id) whose reaction list is open.
     reactions_dialog: Option<(String, String)>,
     /// Selected reaction type tab in that dialog (None = all).
@@ -641,6 +646,8 @@ pub struct ZaloGuiApp {
     pending_clipboard_image: Option<(std::path::PathBuf, u32, u32, TextureHandle)>,
     /// Files dropped on the composer zone, shown as a preview strip until sent or removed.
     pending_drop_files: Vec<workspace::PendingDropFile>,
+    /// Height of the banners + composer below the message list, measured last frame.
+    chat_bottom_stack_h: f32,
     /// Composer `@gif` command state (re-notes/39).
     gif_results: Vec<crate::chat::GifItem>,
     gif_seq: u64,
@@ -845,6 +852,10 @@ impl ZaloGuiApp {
             replying_to: None,
             forward_msg: None,
             forward_filter: String::new(),
+            forward_selected: Vec::new(),
+            forward_tab: 0,
+            forward_note: String::new(),
+            forward_focus_pending: false,
             reactions_dialog: None,
             reactions_tab: None,
             filter_starred_only: false,
@@ -905,6 +916,7 @@ impl ZaloGuiApp {
             composer_focus_pending: false,
             pending_clipboard_image: None,
             pending_drop_files: Vec::new(),
+            chat_bottom_stack_h: 0.0,
             gif_results: Vec::new(),
             gif_seq: 0,
             gif_loading: false,
@@ -999,6 +1011,7 @@ impl ZaloGuiApp {
             } else {
                 let _ = wtx.send(WorkerCmd::RequestQr);
             }
+            let _ = wtx.send(WorkerCmd::CheckForUpdates { silent: true });
         }
         app
     }
@@ -1273,9 +1286,9 @@ impl ZaloGuiApp {
                             }
                             let total_unread: usize = self.unread_counts.values().sum();
                             let title = if total_unread > 0 {
-                                format!("({total_unread}) ctdozlite")
+                                format!("({total_unread}) {}", crate::APP_DISPLAY_NAME)
                             } else {
-                                "ctdozlite".to_string()
+                                crate::APP_DISPLAY_NAME.to_string()
                             };
                             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
                             if !is_focused {
@@ -1990,11 +2003,16 @@ impl ZaloGuiApp {
                                         self.update_modal_open = true;
                                         self.update_banner_dismissed = false;
                                         if self.settings.enable_notifications {
-                                            crate::updater::notify_os_new_update(
-                                                &info.latest_version,
-                                                &info.current_version,
-                                                &info.release_title,
-                                            );
+                                            let (title, body) =
+                                                crate::updater::new_update_notification(
+                                                    &info.latest_version,
+                                                    &info.current_version,
+                                                );
+                                            if let Some(tx) = WORKER_TX.get() {
+                                                let _ = tx.send(
+                                                    WorkerCmd::PostNativeNotification { title, body },
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -2617,7 +2635,7 @@ impl ZaloGuiApp {
 
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("ctdozlite")
+                        RichText::new(crate::APP_DISPLAY_NAME)
                             .color(pal.text_primary)
                             .size(13.5)
                             .strong(),

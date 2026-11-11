@@ -2907,6 +2907,9 @@ pub(super) fn render_chat_bubble(
                 if fr.response.double_clicked() {
                     return Some(BubbleAction::Reply);
                 }
+                if let Some(act) = hover_action_bar(ui, &fr.response, msg, idx, pal) {
+                    return Some(act);
+                }
                 reaction_action
                     .or(quote_action)
                     .or(card_action)
@@ -3046,6 +3049,9 @@ pub(super) fn render_chat_bubble(
                 if fr.response.double_clicked() {
                     return Some(BubbleAction::Reply);
                 }
+                if let Some(act) = hover_action_bar(ui, &fr.response, msg, idx, pal) {
+                    return Some(act);
+                }
                 reaction_action
                     .or(quote_action)
                     .or(card_action)
@@ -3112,6 +3118,231 @@ fn menu_item(ui: &mut egui::Ui, icon: &str, label: &str, text_color: Color32) ->
     response
 }
 
+/// Diameter of one hover action button (Zalo PC: 28px circles beside the bubble).
+const HOVER_BTN: f32 = 28.0;
+const HOVER_GAP: f32 = 6.0;
+
+/// Zalo-style actions shown while the pointer is over a bubble: Trả lời, Chia sẻ and "…"
+/// (opens the compact message menu). Outgoing bubbles get the bar on their left, incoming on
+/// their right; it is bottom-aligned with the bubble.
+fn hover_action_bar(
+    ui: &mut egui::Ui,
+    bubble: &egui::Response,
+    msg: &ChatMessage,
+    idx: usize,
+    pal: &ThemePalette,
+) -> Option<BubbleAction> {
+    let this_key = format!("{}_{}", msg.id, msg.ts);
+    let bar_w = HOVER_BTN * 3.0 + HOVER_GAP * 2.0;
+    let rect = bubble.rect;
+    let bar_left = if msg.is_outgoing {
+        rect.left() - 8.0 - bar_w
+    } else {
+        rect.right() + 8.0
+    };
+    let bar_top = (rect.bottom() - HOVER_BTN - 2.0).max(rect.top());
+    let bar = Rect::from_min_size(Pos2::new(bar_left, bar_top), Vec2::new(bar_w, HOVER_BTN));
+
+    // Keep the bar while this message's "…" menu is open.
+    let menu_open_here = ui.ctx().data(|d| {
+        d.get_temp::<(String, Pos2, usize)>(Id::new("active_bubble_context_menu"))
+            .is_some_and(|(k, _, _)| k == this_key)
+    });
+    let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+    let hovering = pointer.is_some_and(|p| {
+        ui.clip_rect().contains(p)
+            && ui.ctx().layer_id_at(p) == Some(ui.layer_id())
+            && (rect.union(bar).expand2(Vec2::new(4.0, 2.0)).contains(p))
+    });
+    if !hovering && !menu_open_here {
+        return None;
+    }
+
+    let mut action = None;
+    let icons: [(&str, &str); 3] = [
+        (lucide::QUOTE, "Trả lời"),
+        (lucide::FORWARD, "Chia sẻ"),
+        ("", "Thêm"),
+    ];
+    for (i, (icon, tip)) in icons.iter().enumerate() {
+        let r = Rect::from_min_size(
+            Pos2::new(bar.left() + i as f32 * (HOVER_BTN + HOVER_GAP), bar.top()),
+            Vec2::splat(HOVER_BTN),
+        );
+        let resp = ui
+            .interact(
+                r,
+                Id::new(("bubble_hover_btn", &this_key, i)),
+                Sense::click(),
+            )
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text(*tip);
+        let active = resp.hovered() || (i == 2 && menu_open_here);
+        let painter = ui.painter();
+        painter.circle_filled(
+            r.center(),
+            HOVER_BTN / 2.0,
+            if active {
+                pal.bg_hover
+            } else {
+                pal.bg_elevated
+            },
+        );
+        painter.circle_stroke(
+            r.center(),
+            HOVER_BTN / 2.0,
+            Stroke::new(1.0_f32, pal.border),
+        );
+        let col = if active {
+            pal.primary_hover
+        } else {
+            pal.text_secondary
+        };
+        if icon.is_empty() {
+            for dx in [-5.0_f32, 0.0, 5.0] {
+                painter.circle_filled(r.center() + Vec2::new(dx, 0.0), 1.6, col);
+            }
+        } else {
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                *icon,
+                FontId::proportional(14.0),
+                col,
+            );
+        }
+        if i == 2 {
+            // Let the menu's outside-click check ignore presses on this toggle button.
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(Id::new(("bubble_more_btn", &this_key)), r));
+        }
+        if resp.clicked() {
+            match i {
+                0 => action = Some(BubbleAction::Reply),
+                1 => action = Some(BubbleAction::Forward),
+                _ => {
+                    let now = ui.input(|inp| inp.time);
+                    ui.ctx().data_mut(|d| {
+                        if menu_open_here {
+                            d.remove::<(String, Pos2, usize)>(Id::new(
+                                "active_bubble_context_menu",
+                            ));
+                        } else {
+                            d.insert_temp(
+                                Id::new("active_bubble_context_menu"),
+                                (this_key.clone(), r.left_bottom() + Vec2::new(0.0, 6.0), idx),
+                            );
+                            d.insert_temp(Id::new("bubble_context_menu_open_time"), now);
+                            d.insert_temp(Id::new("bubble_context_menu_compact"), true);
+                        }
+                    });
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
+    action
+}
+
+/// Shared look of the message menus (right-click, "…" and its flyout).
+fn menu_frame(pal: &ThemePalette) -> egui::Frame {
+    egui::Frame::none()
+        .fill(if pal.is_dark {
+            Color32::from_rgb(0x25, 0x28, 0x2D)
+        } else {
+            Color32::WHITE
+        })
+        .stroke(Stroke::new(1.0_f32, pal.border))
+        .rounding(Rounding::same(8.0))
+        .shadow(egui::epaint::Shadow {
+            offset: Vec2::new(0.0, 4.0),
+            blur: 16.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(if pal.is_dark { 130 } else { 45 }),
+        })
+        .inner_margin(Margin::symmetric(8.0, 8.0))
+}
+
+fn style_menu_ui(ui: &mut egui::Ui, pal: &ThemePalette) {
+    ui.spacing_mut().item_spacing = Vec2::new(0.0, 4.0);
+    ui.spacing_mut().button_padding = Vec2::new(12.0, 8.0);
+    let w = &mut ui.style_mut().visuals.widgets;
+    w.inactive.bg_stroke = Stroke::NONE;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.hovered.bg_stroke = Stroke::NONE;
+    w.active.bg_stroke = Stroke::NONE;
+    w.hovered.weak_bg_fill = pal.bg_hover;
+}
+
+/// Secondary message actions (reminder, open photo, save file). Shown inline in the right-click
+/// menu and in the "Tuỳ chọn khác" flyout of the compact "…" menu.
+fn message_extra_menu_items(
+    ui: &mut egui::Ui,
+    msg: &ChatMessage,
+    pal: &ThemePalette,
+    action: &mut Option<BubbleAction>,
+    close_menu: &mut bool,
+) {
+    // 5b. Hẹn giờ / Nhắc hẹn cho tin nhắn này (#94)
+    if menu_item(ui, lucide::BELL, "Hẹn giờ / Nhắc hẹn", pal.text_primary).clicked() {
+        *action = Some(BubbleAction::ScheduleReminder);
+        *close_menu = true;
+    }
+
+    // 6. Nếu là ảnh: Xem ảnh phóng to
+    if is_zalo_photo_message(msg) {
+        if let Some(thumb_url) = photo_primary_url(msg) {
+            if menu_item(ui, lucide::SEARCH, "Xem ảnh phóng to", pal.text_primary).clicked() {
+                *action = Some(BubbleAction::OpenImagePopup {
+                    tex_key: format!("thumb_{}", crate::crypto::md5_hex(thumb_url)),
+                    full_url: msg
+                        .link_url
+                        .clone()
+                        .filter(|u| !u.is_empty())
+                        .unwrap_or_else(|| thumb_url.to_string()),
+                    title: msg
+                        .link_title
+                        .clone()
+                        .filter(|t| {
+                            !t.is_empty() && !t.starts_with("http://") && !t.starts_with("https://")
+                        })
+                        .unwrap_or_else(|| "Hình ảnh".to_string()),
+                    sender: if msg.is_outgoing {
+                        "Bạn".to_string()
+                    } else {
+                        msg.sender.clone()
+                    },
+                    time: msg.time.clone(),
+                });
+                *close_menu = true;
+            }
+        }
+    }
+
+    // 7. Nếu là file / video: Lưu tập tin
+    if is_zalo_file_or_video_message(msg) {
+        if let Some(url) = msg.link_url.as_deref().filter(|u| !u.is_empty()) {
+            let resolved_name = crate::chat::resolve_attachment_file_name(
+                msg.link_title.as_deref(),
+                msg.text.trim(),
+                url,
+            );
+            let label = if resolved_name.len() > 18 {
+                format!("Lưu \"{}…\"", &resolved_name[..16])
+            } else {
+                format!("Lưu \"{resolved_name}\"")
+            };
+            if menu_item(ui, lucide::PAPERCLIP, &label, pal.text_primary).clicked() {
+                *action = Some(BubbleAction::DownloadFile {
+                    url: url.to_string(),
+                    file_name: resolved_name,
+                });
+                *close_menu = true;
+            }
+        }
+    }
+}
+
 /// Right-click menu on a chat bubble / row: quote/reply, forward/share, copy, pin, star, delete-for-me.
 pub(super) fn bubble_context_menu(
     ui: &mut egui::Ui,
@@ -3144,6 +3375,7 @@ pub(super) fn bubble_context_menu(
         ui.ctx().data_mut(|d| {
             d.insert_temp(ctx_menu_key, (this_key.clone(), click_pos, idx));
             d.insert_temp(open_time_key, current_time);
+            d.insert_temp(Id::new("bubble_context_menu_compact"), false);
             d.remove::<String>(Id::new("active_hover_reaction_bubble"));
         });
         ui.ctx().request_repaint();
@@ -3159,12 +3391,17 @@ pub(super) fn bubble_context_menu(
     }
 
     let (_, menu_pos, _) = active_menu.unwrap();
+    // Compact = opened from the hover "…" button (Zalo layout); full = right-click.
+    let compact: bool = ui
+        .ctx()
+        .data(|d| d.get_temp(Id::new("bubble_context_menu_compact")))
+        .unwrap_or(false);
     let mut action = None;
     let mut close_menu = false;
 
     let screen = ui.ctx().screen_rect();
-    let menu_w = 220.0_f32;
-    let menu_h = 440.0_f32;
+    let menu_w = if compact { 230.0_f32 } else { 220.0_f32 };
+    let menu_h = if compact { 330.0_f32 } else { 440.0_f32 };
     let pos = Pos2::new(
         menu_pos.x.clamp(
             screen.left() + 8.0,
@@ -3180,32 +3417,12 @@ pub(super) fn bubble_context_menu(
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
         .show(ui.ctx(), |ui| {
-            egui::Frame::none()
-                .fill(if pal.is_dark {
-                    Color32::from_rgb(33, 37, 43)
-                } else {
-                    Color32::WHITE
-                })
-                .stroke(Stroke::new(1.0_f32, pal.border))
-                .rounding(Rounding::same(8.0))
-                .shadow(egui::epaint::Shadow {
-                    offset: Vec2::new(0.0, 4.0),
-                    blur: 16.0,
-                    spread: 0.0,
-                    color: Color32::from_black_alpha(if pal.is_dark { 130 } else { 45 }),
-                })
-                .inner_margin(Margin::symmetric(10.0, 10.0))
-                .show(ui, |ui| {
-                    ui.set_width(menu_w);
-                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
-                    ui.spacing_mut().button_padding = Vec2::new(12.0, 8.0);
-                    ui.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
-                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                    ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
-                    ui.style_mut().visuals.widgets.active.bg_stroke = Stroke::NONE;
-                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = pal.bg_hover;
+            menu_frame(pal).show(ui, |ui| {
+                ui.set_width(menu_w);
+                style_menu_ui(ui, pal);
 
-                    // 0. Hàng emoji thả cảm xúc (giống Zalo gốc khi chuột phải)
+                // 0. Hàng emoji thả cảm xúc (giống Zalo gốc khi chuột phải)
+                if !compact {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
                         for &(code, key, tooltip) in &REACTION_LIST {
@@ -3243,150 +3460,148 @@ pub(super) fn bubble_context_menu(
                         action = Some(BubbleAction::Forward);
                         close_menu = true;
                     }
+                }
 
-                    // 3. Copy tin nhắn
-                    if menu_item(ui, lucide::COPY, "Copy tin nhắn", pal.text_primary).clicked() {
-                        ui.ctx().copy_text(message_copy_text(msg));
-                        close_menu = true;
-                    }
-
-                    // 4. Ghim tin nhắn
-                    let pin_label = if msg.is_pinned {
-                        "Bỏ ghim tin nhắn"
-                    } else {
-                        "Ghim tin nhắn"
-                    };
-                    if menu_item(ui, lucide::PIN, pin_label, pal.text_primary).clicked() {
-                        action = Some(BubbleAction::TogglePin);
-                        close_menu = true;
-                    }
-
-                    // 5. Đánh dấu tin nhắn
-                    let star_label = if msg.is_starred {
-                        "Bỏ đánh dấu tin nhắn"
-                    } else {
-                        "Đánh dấu tin nhắn"
-                    };
-                    if menu_item(ui, lucide::STAR, star_label, pal.text_primary).clicked() {
-                        action = Some(BubbleAction::ToggleStar);
-                        close_menu = true;
-                    }
-
-                    // 5b. Hẹn giờ / Nhắc hẹn cho tin nhắn này (#94)
-                    if menu_item(ui, lucide::BELL, "Hẹn giờ / Nhắc hẹn", pal.text_primary).clicked()
-                    {
-                        action = Some(BubbleAction::ScheduleReminder);
-                        close_menu = true;
-                    }
-
-                    // 6. Nếu là ảnh: Xem ảnh phóng to
-                    if is_zalo_photo_message(msg) {
-                        if let Some(thumb_url) = photo_primary_url(msg) {
-                            if menu_item(ui, lucide::SEARCH, "Xem ảnh phóng to", pal.text_primary)
-                                .clicked()
-                            {
-                                action = Some(BubbleAction::OpenImagePopup {
-                                    tex_key: format!("thumb_{}", crate::crypto::md5_hex(thumb_url)),
-                                    full_url: msg
-                                        .link_url
-                                        .clone()
-                                        .filter(|u| !u.is_empty())
-                                        .unwrap_or_else(|| thumb_url.to_string()),
-                                    title: msg
-                                        .link_title
-                                        .clone()
-                                        .filter(|t| {
-                                            !t.is_empty()
-                                                && !t.starts_with("http://")
-                                                && !t.starts_with("https://")
-                                        })
-                                        .unwrap_or_else(|| "Hình ảnh".to_string()),
-                                    sender: if msg.is_outgoing {
-                                        "Bạn".to_string()
-                                    } else {
-                                        msg.sender.clone()
-                                    },
-                                    time: msg.time.clone(),
-                                });
-                                close_menu = true;
-                            }
-                        }
-                    }
-
-                    // 7. Nếu là file / video: Lưu tập tin
-                    if is_zalo_file_or_video_message(msg) {
-                        if let Some(url) = msg.link_url.as_deref().filter(|u| !u.is_empty()) {
-                            let resolved_name = crate::chat::resolve_attachment_file_name(
-                                msg.link_title.as_deref(),
-                                msg.text.trim(),
-                                url,
-                            );
-                            let label = if resolved_name.len() > 18 {
-                                format!("Lưu \"{}…\"", &resolved_name[..16])
-                            } else {
-                                format!("Lưu \"{resolved_name}\"")
-                            };
-                            if menu_item(ui, lucide::PAPERCLIP, &label, pal.text_primary).clicked()
-                            {
-                                action = Some(BubbleAction::DownloadFile {
-                                    url: url.to_string(),
-                                    file_name: resolved_name,
-                                });
-                                close_menu = true;
-                            }
-                        }
-                    }
-
-                    ui.add_space(4.0);
+                // 3. Copy tin nhắn
+                if menu_item(ui, lucide::COPY, "Copy tin nhắn", pal.text_primary).clicked() {
+                    ui.ctx().copy_text(message_copy_text(msg));
+                    close_menu = true;
+                }
+                if compact {
                     ui.separator();
-                    ui.add_space(4.0);
+                }
 
-                    // 8. Thu hồi tin nhắn (với mọi người)
-                    if msg.is_outgoing
-                        && msg.text.trim() != "[Tin nhắn đã thu hồi]"
-                        && !msg.text.starts_with("[Đã thu hồi]")
-                    {
-                        if menu_item(ui, lucide::BAN, "Thu hồi", Color32::from_rgb(249, 115, 22))
-                            .clicked()
-                        {
-                            action = Some(BubbleAction::RecallForEveryone);
-                            close_menu = true;
-                        }
+                // 4. Ghim tin nhắn
+                let pin_label = if msg.is_pinned {
+                    "Bỏ ghim tin nhắn"
+                } else {
+                    "Ghim tin nhắn"
+                };
+                if menu_item(ui, lucide::PIN, pin_label, pal.text_primary).clicked() {
+                    action = Some(BubbleAction::TogglePin);
+                    close_menu = true;
+                }
+
+                // 5. Đánh dấu tin nhắn
+                let star_label = if msg.is_starred {
+                    "Bỏ đánh dấu tin nhắn"
+                } else {
+                    "Đánh dấu tin nhắn"
+                };
+                if menu_item(ui, lucide::STAR, star_label, pal.text_primary).clicked() {
+                    action = Some(BubbleAction::ToggleStar);
+                    close_menu = true;
+                }
+
+                if !compact {
+                    message_extra_menu_items(ui, msg, pal, &mut action, &mut close_menu);
+                } else {
+                    let more_key = Id::new(("bubble_menu_more", &this_key));
+                    let row = ui.add(
+                        egui::Button::new(
+                            RichText::new(format!("{}   Tuỳ chọn khác", lucide::SLIDERS))
+                                .size(13.0)
+                                .color(pal.text_primary),
+                        )
+                        .stroke(Stroke::NONE)
+                        .rounding(Rounding::same(7.0))
+                        .min_size(Vec2::new(ui.available_width(), 34.0)),
+                    );
+                    ui.painter().text(
+                        Pos2::new(row.rect.right() - 12.0, row.rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        lucide::CHEVRON_RIGHT,
+                        FontId::proportional(13.0),
+                        pal.text_secondary,
+                    );
+                    let flyout_prev: Option<Rect> = ui.ctx().data(|d| d.get_temp(more_key));
+                    let ptr = ui.ctx().input(|i| i.pointer.hover_pos());
+                    let keep = ptr.is_some_and(|p| {
+                        row.rect.expand(2.0).contains(p)
+                            || flyout_prev.is_some_and(|r| r.expand(6.0).contains(p))
+                    });
+                    if row.hovered() || row.clicked() || keep {
+                        let area = egui::Area::new(Id::new(("bubble_menu_more_area", &this_key)))
+                            .order(egui::Order::Foreground)
+                            .fixed_pos(row.rect.right_top() + Vec2::new(14.0, -10.0))
+                            .show(ui.ctx(), |ui| {
+                                menu_frame(pal).show(ui, |ui| {
+                                    ui.set_width(210.0);
+                                    style_menu_ui(ui, pal);
+                                    message_extra_menu_items(
+                                        ui,
+                                        msg,
+                                        pal,
+                                        &mut action,
+                                        &mut close_menu,
+                                    );
+                                });
+                            });
+                        ui.ctx()
+                            .data_mut(|d| d.insert_temp(more_key, area.response.rect));
+                    } else {
+                        ui.ctx().data_mut(|d| d.remove::<Rect>(more_key));
                     }
+                }
 
-                    // 9. Xóa chỉ ở phía tôi
-                    if menu_item(
-                        ui,
-                        lucide::TRASH_2,
-                        "Xóa chỉ ở phía tôi",
-                        Color32::from_rgb(239, 68, 68),
-                    )
-                    .clicked()
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // 8. Thu hồi tin nhắn (với mọi người)
+                if msg.is_outgoing
+                    && msg.text.trim() != "[Tin nhắn đã thu hồi]"
+                    && !msg.text.starts_with("[Đã thu hồi]")
+                {
+                    if menu_item(ui, lucide::BAN, "Thu hồi", Color32::from_rgb(249, 115, 22))
+                        .clicked()
                     {
-                        action = Some(BubbleAction::DeleteForMe);
+                        action = Some(BubbleAction::RecallForEveryone);
                         close_menu = true;
                     }
+                }
 
-                    let menu_rect = ui.min_rect();
-                    let pointer_pos = ui
-                        .ctx()
-                        .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
-                    let open_time: f64 =
-                        ui.ctx().data(|d| d.get_temp(open_time_key)).unwrap_or(0.0);
-                    if ui.input(|i| i.time) > open_time + 0.05 {
-                        let pressed = ui.ctx().input(|i| i.pointer.any_pressed());
-                        if pressed {
-                            if let Some(pos) = pointer_pos {
-                                if !menu_rect.expand(4.0).contains(pos) {
-                                    close_menu = true;
-                                }
+                // 9. Xóa chỉ ở phía tôi
+                if menu_item(
+                    ui,
+                    lucide::TRASH_2,
+                    "Xóa chỉ ở phía tôi",
+                    Color32::from_rgb(239, 68, 68),
+                )
+                .clicked()
+                {
+                    action = Some(BubbleAction::DeleteForMe);
+                    close_menu = true;
+                }
+
+                let menu_rect = ui.min_rect();
+                let pointer_pos = ui
+                    .ctx()
+                    .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+                let open_time: f64 = ui.ctx().data(|d| d.get_temp(open_time_key)).unwrap_or(0.0);
+                if ui.input(|i| i.time) > open_time + 0.05 {
+                    let pressed = ui.ctx().input(|i| i.pointer.any_pressed());
+                    if pressed {
+                        let flyout: Option<Rect> = ui
+                            .ctx()
+                            .data(|d| d.get_temp(Id::new(("bubble_menu_more", &this_key))));
+                        if let Some(pos) = pointer_pos {
+                            let more_btn: Option<Rect> = ui
+                                .ctx()
+                                .data(|d| d.get_temp(Id::new(("bubble_more_btn", &this_key))));
+                            if !menu_rect.expand(4.0).contains(pos)
+                                && !flyout.is_some_and(|r| r.expand(4.0).contains(pos))
+                                && !more_btn.is_some_and(|r| r.contains(pos))
+                            {
+                                close_menu = true;
                             }
                         }
                     }
-                    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
-                        close_menu = true;
-                    }
-                });
+                }
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close_menu = true;
+                }
+            });
         });
 
     if close_menu {

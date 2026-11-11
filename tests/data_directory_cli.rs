@@ -165,7 +165,7 @@ fn legacy_cli_keeps_cwd_and_version_does_not_prepare_storage() {
     assert!(result.status.success());
     assert_eq!(
         String::from_utf8_lossy(&result.stdout).trim(),
-        format!("ctdozlite v{}", env!("CARGO_PKG_VERSION"))
+        format!("ctdozlite-next v{}", env!("CARGO_PKG_VERSION"))
     );
     assert!(!data.exists());
     assert_eq!(std::fs::read_dir(&fixture.0).unwrap().count(), 0);

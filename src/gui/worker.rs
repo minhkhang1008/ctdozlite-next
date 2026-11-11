@@ -63,6 +63,8 @@ pub enum WorkerCmd {
         target_is_group: bool,
         msg: ChatMessage,
         target_name: String,
+        /// Optional text sent right after the forwarded message (share dialog note).
+        note: Option<String>,
     },
     React {
         to_id: String,
@@ -858,6 +860,26 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             } else {
                                 tokio::time::sleep(Duration::from_secs(3)).await;
                             }
+                        }
+                    });
+                }
+
+                // Periodic GitHub Releases update check (every 30 minutes). The first tick is
+                // skipped because ZaloGuiApp::new already asks for a check at startup.
+                {
+                    let gui_tx_upd = gui_tx.clone();
+                    let ctx_upd = egui_ctx.clone();
+                    tokio::spawn(async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(30 * 60));
+                        ticker.tick().await;
+                        loop {
+                            ticker.tick().await;
+                            let res = fetch_github_latest_release().await;
+                            let _ = gui_tx_upd.send(GuiEvent::UpdateCheckFinished {
+                                result: res,
+                                silent: true,
+                            });
+                            ctx_upd.request_repaint();
                         }
                     });
                 }
@@ -2279,6 +2301,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             target_is_group,
                             msg,
                             target_name,
+                            note,
                         } => {
                             let session_clone = session.clone();
                             let gui_tx_clone = gui_tx.clone();
@@ -2340,6 +2363,38 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                 msg_id,
                                                 mentions: Vec::new(),
                                             });
+                                        }
+                                        // The share-dialog note goes after the forwarded message.
+                                        if let Some(note) = note.filter(|n| !n.trim().is_empty()) {
+                                            let note_id = crate::chat::next_client_message_id();
+                                            let sent = if target_is_group {
+                                                crate::chat::send_group_message_with_client_id(
+                                                    &s, &target_id, &note, note_id,
+                                                )
+                                                .await
+                                            } else {
+                                                crate::chat::send_message_with_client_id(
+                                                    &s, &target_id, &note, note_id,
+                                                )
+                                                .await
+                                            };
+                                            match sent {
+                                                Ok(resp) => {
+                                                    let _ = gui_tx_clone.send(GuiEvent::MessageSent {
+                                                        client_message_id: note_id.to_string(),
+                                                        thread_id: target_id.clone(),
+                                                        text: note,
+                                                        msg_id: extract_msg_id(&resp),
+                                                        mentions: Vec::new(),
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    crate::logger::log_error(
+                                                        "gui::forward_note",
+                                                        &e.to_string(),
+                                                    );
+                                                }
+                                            }
                                         }
                                         let _ = gui_tx_clone.send(GuiEvent::ForwardFinished {
                                             target_name: target_name.clone(),
@@ -3692,14 +3747,12 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
         .expect("Failed to spawn zalo-worker thread");
 }
 
-const GITHUB_REPO: &str = "ctdoteam1110/ctdozlite";
-const AUTO_UPDATER_ENABLED: bool = false;
+/// Releases of this fork. Update checks only talk to GitHub (`api.github.com`,
+/// `github.com/.../releases`) and never carry Zalo cookies; every download is size-limited and
+/// verified against the release's SHA-256 digest before install.
+const GITHUB_REPO: &str = "minhkhang1008/ctdozlite-next";
 
 pub(crate) async fn fetch_github_latest_release() -> Result<UpdateCheckResult, String> {
-    if !AUTO_UPDATER_ENABLED {
-        return Err("Auto-updater is disabled in personal build".into());
-    }
-
     let current_ver = env!("CARGO_PKG_VERSION").to_string();
     let client = reqwest::Client::builder()
         .user_agent(format!("ctdozlite/{current_ver}"))
@@ -3814,10 +3867,6 @@ async fn apply_github_release_update(
     gui_tx: &GuiTx,
     ctx: &egui::Context,
 ) -> Result<bool, String> {
-    if !AUTO_UPDATER_ENABLED {
-        return Err("Auto-updater is disabled in personal build".into());
-    }
-
     let client = reqwest::Client::builder()
         .user_agent(format!("ctdozlite/{target_version}"))
         .timeout(Duration::from_secs(240))
@@ -3839,6 +3888,31 @@ async fn apply_github_release_update(
     .await?;
 
     let name_low = asset_name.to_lowercase();
+
+    // macOS: replace the running .app in place (only for a SHA-256-verified DMG), then relaunch.
+    #[cfg(target_os = "macos")]
+    if name_low.ends_with(".dmg") && expected_sha256.is_some() {
+        if let Some(bundle) = crate::updater::current_app_bundle() {
+            let dmg = bytes.clone();
+            let target = bundle.clone();
+            let installed = tokio::task::spawn_blocking(move || {
+                crate::updater::install_macos_app_from_dmg(&dmg, &target)
+            })
+            .await
+            .map_err(|e| format!("Lỗi tác vụ cài đặt: {e}"))?;
+            match installed {
+                Ok(()) => {
+                    crate::updater::relaunch_app_bundle_after_exit(&bundle)?;
+                    return Ok(true);
+                }
+                Err(e) => {
+                    // Fall through to the manual path (open the DMG) below.
+                    crate::logger::log_error("updater::install_macos_app", &e);
+                }
+            }
+        }
+    }
+
     let is_portable_bin =
         (cfg!(target_os = "windows") && name_low.ends_with(".exe") && !name_low.contains("setup"))
             || (cfg!(target_os = "linux") && name_low.ends_with(".appimage"));

@@ -1,3 +1,8 @@
+/// User-facing product name (window title, header, notifications). Technical identifiers
+/// (binary, bundle id, data directory, eframe storage key) stay `ctdozlite` so existing data
+/// and notification permissions carry over.
+pub const APP_DISPLAY_NAME: &str = "ctdozlite-next";
+
 pub mod account_manager;
 pub mod audio;
 pub mod call;

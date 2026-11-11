@@ -40,19 +40,18 @@ pub(super) struct ThemePalette {
 
 impl ThemePalette {
     pub(super) fn dark() -> Self {
-        // Zalo PC dark tokens, measured on chat.zalo.me (2026-11-11):
-        // nav rail `--layer-background-navbar-normal`, panels `--layer-background`,
-        // bubbles `--white-message` / `--blue-message`.
+        // Based on Zalo PC dark tokens (chat.zalo.me, 2026-11-11), with a darker canvas and
+        // lighter gray bubbles (2026-11-12, owner request) so messages stand out from the background.
         Self {
             is_dark: true,
             bg_app: Color32::from_rgb(0x12, 0x14, 0x16), // #121416 nav rail / title bar
-            bg_sidebar: Color32::from_rgb(0x22, 0x26, 0x2B), // #22262B conversation list, header
-            bg_chat_canvas: Color32::from_rgb(0x22, 0x26, 0x2B), // #22262B message area
+            bg_sidebar: Color32::from_rgb(0x1B, 0x1E, 0x22), // #1B1E22 conversation list, header
+            bg_chat_canvas: Color32::from_rgb(0x12, 0x14, 0x17), // #121417 message area (darker)
             bg_elevated: Color32::from_rgb(0x28, 0x2D, 0x33), // #282D33 cards, popovers
-            bg_hover: Color32::from_rgb(0x2D, 0x31, 0x36), // white 5% over #22262B
+            bg_hover: Color32::from_rgb(0x26, 0x2A, 0x2F), // hover over #1B1E22
             bg_selected: Color32::from_rgb(0x1F, 0x34, 0x4D), // #1F344D selected row
-            bg_input: Color32::from_rgb(0x16, 0x19, 0x1D), // #16191D search / input well
-            border: Color32::from_rgb(0x38, 0x3C, 0x40), // white 10% over #22262B (divider)
+            bg_input: Color32::from_rgb(0x10, 0x12, 0x15), // #101215 search / input well
+            border: Color32::from_rgb(0x2E, 0x32, 0x37), // #2E3237 divider
             text_primary: Color32::from_rgb(0xDF, 0xE2, 0xE7), // #DFE2E7
             text_secondary: Color32::from_rgb(0x9F, 0xAC, 0xBC), // #9FACBC
             text_muted: Color32::from_rgb(0x73, 0x82, 0x96), // #738296 placeholder
@@ -61,11 +60,11 @@ impl ThemePalette {
             accent_online: Color32::from_rgb(0x4B, 0xC3, 0x77), // #4BC377
             danger: Color32::from_rgb(0xE9, 0x49, 0x49), // #E94949 badge / errors
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29), // #FFCD29
-            bubble_out_bg: Color32::from_rgb(0x1F, 0x34, 0x4D), // #1F344D
+            bubble_out_bg: Color32::from_rgb(0x34, 0x3D, 0x4A), // #343D4A gray with a blue tint (own)
             bubble_out_text: Color32::from_rgb(0xDF, 0xE2, 0xE7),
             bubble_out_meta: Color32::from_rgb(0x9F, 0xAC, 0xBC),
-            bubble_in_bg: Color32::from_rgb(0x28, 0x2D, 0x33), // #282D33
-            bubble_in_border: Color32::from_rgb(0x28, 0x2D, 0x33), // borderless, shadow only
+            bubble_in_bg: Color32::from_rgb(0x30, 0x34, 0x3A), // #30343A neutral gray
+            bubble_in_border: Color32::from_rgb(0x30, 0x34, 0x3A), // borderless, shadow only
             bubble_in_text: Color32::from_rgb(0xDF, 0xE2, 0xE7),
             bubble_in_meta: Color32::from_rgb(0x9F, 0xAC, 0xBC),
             nav_icon: Color32::from_rgb(0xDF, 0xE2, 0xE7), // #DFE2E7

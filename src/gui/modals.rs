@@ -1871,7 +1871,7 @@ impl ZaloGuiApp {
                                                             .on_hover_cursor(CursorIcon::PointingHand)
                                                             .clicked()
                                                         {
-                                                            open_external_url("https://github.com/minhkhang1008/ctdozlite/blob/main/docs/TINH_NANG.md");
+                                                            open_external_url("https://github.com/minhkhang1008/ctdozlite-next/blob/main/docs/TINH_NANG.md");
                                                         }
                                                         ui.add_space(4.0);
                                                         let total_msgs: usize = self.threads.iter().map(|t| t.messages.len()).sum();
@@ -2690,7 +2690,7 @@ impl ZaloGuiApp {
                                                         ui.vertical(|ui| {
                                                             ui.horizontal(|ui| {
                                                                 ui.label(
-                                                                    RichText::new("Zalo Lite")
+                                                                    RichText::new(crate::APP_DISPLAY_NAME)
                                                                         .size(15.0)
                                                                         .color(pal.text_primary)
                                                                         .strong(),
@@ -6044,118 +6044,354 @@ impl ZaloGuiApp {
         }
     }
 
+    /// Zalo-style "Chia sẻ" dialog: search, Gần đây / Nhóm / Bạn bè tabs, multi-select list,
+    /// a preview of what is shared, an optional note, Hủy / Chia sẻ.
     pub(super) fn render_forward_dialog(&mut self, ctx: &egui::Context, pal: &ThemePalette) {
-        if self.forward_msg.is_none() {
+        let Some(fwd) = self.forward_msg.clone() else {
             return;
-        }
-        let preview = self
-            .forward_msg
-            .as_ref()
-            .map(|m| {
-                if m.sticker_id.is_some() {
-                    "[Nhãn dán]".to_string()
-                } else {
-                    truncate_chars(&m.text, 80).into_owned()
-                }
+        };
+        let mut open = !ctx.input(|i| i.key_pressed(Key::Escape));
+        let mut share = false;
+
+        // Candidate conversations for the active tab, filtered by the (accent-insensitive) query.
+        let query = crate::chat::strip_vn_for_sticker_kw(self.forward_filter.trim());
+        let tab = self.forward_tab;
+        let rows: Vec<(String, String, bool, Option<String>, bool)> = self
+            .threads
+            .iter()
+            .filter(|t| match tab {
+                1 => t.is_group,
+                2 => !t.is_group,
+                _ => true,
             })
-            .unwrap_or_default();
-        let query = self.forward_filter.trim().to_lowercase();
-        let cloud_target = self
-            .threads
-            .iter()
-            .find(|t| !t.is_group && t.name.contains("Cloud của tôi"))
-            .map(|t| (t.id.clone(), t.name.clone(), false));
-        let candidates: Vec<(String, String, bool)> = self
-            .threads
-            .iter()
             .filter(|t| {
-                !query.is_empty()
-                    && !t.name.contains("Cloud của tôi")
-                    && t.name.to_lowercase().contains(&query)
+                query.is_empty() || crate::chat::strip_vn_for_sticker_kw(&t.name).contains(&query)
             })
-            .map(|t| (t.id.clone(), t.name.clone(), t.is_group))
+            .take(300)
+            .map(|t| {
+                let blocked = t.is_group && t.presentation.posting_restricted == Some(true);
+                (
+                    t.id.clone(),
+                    t.name.clone(),
+                    t.is_group,
+                    t.avatar.clone(),
+                    blocked,
+                )
+            })
             .collect();
-        let mut open = true;
-        let mut chosen: Option<(String, bool, String)> = None;
-        egui::Window::new("Chuyển tiếp tin nhắn")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(Vec2::new(360.0, 420.0))
+
+        // What is being shared.
+        let (kind_label, detail, thumb_url) = if fwd.sticker_id.is_some() {
+            ("Nhãn dán".to_string(), String::new(), None)
+        } else if is_zalo_photo_message(&fwd) {
+            (
+                "Hình ảnh".to_string(),
+                fwd.link_title.clone().unwrap_or_default(),
+                photo_primary_url(&fwd).map(str::to_string),
+            )
+        } else if is_zalo_file_or_video_message(&fwd) {
+            (
+                "Tập tin".to_string(),
+                fwd.link_title.clone().unwrap_or_else(|| fwd.text.clone()),
+                None,
+            )
+        } else if let Some(url) = fwd.link_url.clone().filter(|u| !u.is_empty()) {
+            ("Chia sẻ link".to_string(), url, fwd.link_thumb.clone())
+        } else {
+            (
+                "Tin nhắn".to_string(),
+                fwd.text.split_whitespace().collect::<Vec<_>>().join(" "),
+                None,
+            )
+        };
+
+        let screen = ctx.screen_rect();
+        let card_w = (screen.width() - 32.0).clamp(360.0, 540.0);
+        let card_h = (screen.height() - 48.0).clamp(420.0, 720.0);
+        let mut backdrop_clicked: Option<Pos2> = None;
+        egui::Area::new(Id::new("forward_modal_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                ui.label(
-                    RichText::new(format!("Nội dung: {preview}"))
-                        .size(12.5)
-                        .color(pal.text_secondary),
+                let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter().rect_filled(
+                    r,
+                    Rounding::ZERO,
+                    Color32::from_rgba_unmultiplied(0, 0, 0, if pal.is_dark { 150 } else { 90 }),
                 );
-                ui.add_space(6.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.forward_filter)
-                        .hint_text("Tìm hội thoại…")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.add_space(6.0);
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
+                if resp.clicked() {
+                    backdrop_clicked = resp.interact_pointer_pos();
+                }
+            });
+
+        let card = egui::Area::new(Id::new("forward_modal_card"))
+            .order(egui::Order::Tooltip)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(pal.bg_sidebar)
+                    .stroke(Stroke::new(1.0_f32, pal.border))
+                    .rounding(Rounding::same(8.0))
+                    .shadow(egui::epaint::Shadow {
+                        offset: Vec2::new(0.0, 8.0),
+                        blur: 24.0,
+                        spread: 0.0,
+                        color: Color32::from_black_alpha(if pal.is_dark { 130 } else { 40 }),
+                    })
                     .show(ui, |ui| {
-                        if let Some((id, name, is_group)) = &cloud_target {
-                            let btn = egui::Button::new(
-                                RichText::new("Cloud của tôi (Lưu trữ)").size(13.5),
-                            )
-                            .fill(pal.bg_input);
-                            if ui
-                                .add_sized([ui.available_width(), 34.0], btn)
-                                .on_hover_cursor(CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                chosen = Some((id.clone(), *is_group, name.clone()));
-                            }
-                        }
+                        ui.set_width(card_w);
+                        ui.set_max_height(card_h);
+                        ui.spacing_mut().item_spacing = Vec2::ZERO;
 
-                        if query.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("Nhập tên vào ô tìm kiếm để chọn hội thoại khác")
-                                    .size(11.5)
-                                    .color(pal.text_muted),
-                            );
-                            return;
-                        }
+                        // Header
+                        ui.horizontal(|ui| {
+                            ui.set_height(52.0);
+                            ui.add_space(18.0);
+                            ui.label(RichText::new("Chia sẻ").size(17.0).strong().color(pal.text_primary));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.add_space(12.0);
+                                if ui
+                                    .add(
+                                        egui::Button::new(RichText::new(lucide::X).size(18.0).color(pal.text_primary))
+                                            .frame(false),
+                                    )
+                                    .on_hover_cursor(CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    open = false;
+                                }
+                            });
+                        });
+                        ui.painter().hline(ui.min_rect().x_range(), ui.min_rect().bottom(), Stroke::new(1.0_f32, pal.border));
 
-                        ui.add_space(6.0);
-                        for (id, name, is_group) in &candidates {
-                            let label = if *is_group {
-                                format!("[Nhóm] {name}")
-                            } else {
-                                name.clone()
-                            };
-                            let btn = egui::Button::new(RichText::new(label).size(13.5))
-                                .fill(pal.bg_input);
-                            if ui
-                                .add_sized([ui.available_width(), 30.0], btn)
-                                .on_hover_cursor(CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                chosen = Some((id.clone(), *is_group, name.clone()));
-                            }
-                        }
+                        egui::Frame::none().inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                            // Search
+                            egui::Frame::none()
+                                .fill(pal.bg_input)
+                                .rounding(Rounding::same(6.0))
+                                .stroke(Stroke::new(1.0_f32, pal.primary.linear_multiply(0.8)))
+                                .inner_margin(Margin::symmetric(10.0, 7.0))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(lucide::SEARCH).size(14.0).color(pal.text_secondary));
+                                        let te = ui.add(
+                                            egui::TextEdit::singleline(&mut self.forward_filter)
+                                                .hint_text("Tìm kiếm...")
+                                                .frame(false)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                        if self.forward_focus_pending {
+                                            te.request_focus();
+                                            self.forward_focus_pending = false;
+                                        }
+                                    });
+                                });
+
+                            // Tabs
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(20.0, 0.0);
+                                for (i, label) in ["Gần đây", "Nhóm trò chuyện", "Bạn bè"].iter().enumerate() {
+                                    let active = self.forward_tab == i as u8;
+                                    let resp = ui
+                                        .add(
+                                            egui::Label::new(
+                                                RichText::new(*label).size(14.0).color(if active {
+                                                    pal.primary_hover
+                                                } else {
+                                                    pal.text_primary
+                                                }),
+                                            )
+                                            .sense(Sense::click()),
+                                        )
+                                        .on_hover_cursor(CursorIcon::PointingHand);
+                                    if active {
+                                        let r = resp.rect;
+                                        ui.painter().hline(r.x_range(), r.bottom() + 6.0, Stroke::new(2.0_f32, pal.primary_hover));
+                                    }
+                                    if resp.clicked() {
+                                        self.forward_tab = i as u8;
+                                    }
+                                }
+                            });
+                            ui.add_space(4.0);
+                            ui.separator();
+
+                            // Conversation list
+                            let list_h = (card_h - 52.0 - 24.0 - 44.0 - 36.0 - 70.0 - 92.0 - 64.0).max(140.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("forward_modal_list")
+                                .max_height(list_h)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                                    if rows.is_empty() {
+                                        ui.add_space(16.0);
+                                        ui.label(RichText::new("Không tìm thấy hội thoại").size(13.0).color(pal.text_muted));
+                                    }
+                                    for (id, name, is_group, avatar, blocked) in &rows {
+                                        let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::click());
+                                        let selected = self.forward_selected.iter().any(|(sid, _, _)| sid == id);
+                                        if resp.hovered() && !blocked {
+                                            ui.painter().rect_filled(r, Rounding::same(6.0), pal.bg_hover);
+                                        }
+                                        let box_r = Rect::from_center_size(Pos2::new(r.left() + 18.0, r.center().y), Vec2::splat(18.0));
+                                        if selected {
+                                            ui.painter().rect_filled(box_r, Rounding::same(4.0), pal.primary);
+                                            ui.painter().text(box_r.center(), egui::Align2::CENTER_CENTER, lucide::CHECK, FontId::proportional(13.0), Color32::WHITE);
+                                        } else {
+                                            ui.painter().rect_stroke(box_r, Rounding::same(4.0), Stroke::new(1.5_f32, pal.text_muted));
+                                        }
+                                        paint_user_avatar(
+                                            ui.painter(),
+                                            Pos2::new(r.left() + 58.0, r.center().y),
+                                            20.0,
+                                            name,
+                                            *is_group,
+                                            avatar.as_deref(),
+                                            &self.sticker_textures,
+                                            &mut self.loading_stickers,
+                                        );
+                                        ui.painter().text(
+                                            Pos2::new(r.left() + 88.0, r.center().y),
+                                            egui::Align2::LEFT_CENTER,
+                                            truncate_chars(name, 48),
+                                            FontId::proportional(14.5),
+                                            if *blocked { pal.text_muted } else { pal.text_primary },
+                                        );
+                                        let resp = if *blocked {
+                                            resp.on_hover_text("Chỉ trưởng/phó nhóm được gửi tin nhắn vào nhóm này")
+                                        } else {
+                                            resp.on_hover_cursor(CursorIcon::PointingHand)
+                                        };
+                                        if resp.clicked() && !blocked {
+                                            if selected {
+                                                self.forward_selected.retain(|(sid, _, _)| sid != id);
+                                            } else {
+                                                self.forward_selected.push((id.clone(), *is_group, name.clone()));
+                                            }
+                                        }
+                                    }
+                                });
+                            ui.separator();
+                            ui.add_space(4.0);
+
+                            // Preview of the shared content
+                            egui::Frame::none()
+                                .fill(pal.bg_input)
+                                .rounding(Rounding::same(6.0))
+                                .inner_margin(Margin::same(10.0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        if let Some(url) = thumb_url.as_deref().filter(|u| !u.is_empty()) {
+                                            let key = format!("thumb_{}", crate::crypto::md5_hex(url));
+                                            match self.sticker_textures.get(&key) {
+                                                Some(tex) => {
+                                                    ui.add(egui::Image::new(tex).fit_to_exact_size(Vec2::splat(44.0)).rounding(Rounding::same(4.0)));
+                                                }
+                                                None => {
+                                                    if self.loading_stickers.insert(key.clone()) {
+                                                        if let Some(tx) = WORKER_TX.get() {
+                                                            let _ = tx.send(WorkerCmd::FetchStickerImage { key, url: url.to_string() });
+                                                        }
+                                                    }
+                                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(44.0), Sense::hover());
+                                                    ui.painter().rect_filled(r, Rounding::same(4.0), pal.bg_hover);
+                                                }
+                                            }
+                                            ui.add_space(10.0);
+                                        }
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                                            ui.label(RichText::new(&kind_label).size(13.5).strong().color(pal.text_primary));
+                                            if !detail.is_empty() {
+                                                ui.add(egui::Label::new(RichText::new(&detail).size(13.0).color(pal.text_secondary)).truncate());
+                                            }
+                                        });
+                                    });
+                                });
+
+                            // Optional note
+                            egui::Frame::none()
+                                .fill(pal.bg_input)
+                                .rounding(Rounding::same(6.0))
+                                .stroke(Stroke::new(1.0_f32, pal.border))
+                                .inner_margin(Margin::symmetric(10.0, 8.0))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut self.forward_note)
+                                            .hint_text("Nhập tin nhắn kèm theo (không bắt buộc)…")
+                                            .frame(false)
+                                            .desired_rows(2)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        });
+
+                        // Footer
+                        ui.painter().hline(ui.min_rect().x_range(), ui.min_rect().bottom(), Stroke::new(1.0_f32, pal.border));
+                        egui::Frame::none().inner_margin(Margin::symmetric(16.0, 12.0)).show(ui, |ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(10.0, 0.0);
+                                let n = self.forward_selected.len();
+                                let share_label = if n > 1 { format!("Chia sẻ ({n})") } else { "Chia sẻ".to_string() };
+                                let share_btn = egui::Button::new(RichText::new(share_label).size(14.5).strong().color(if n > 0 {
+                                    Color32::WHITE
+                                } else {
+                                    pal.text_muted
+                                }))
+                                .fill(if n > 0 { pal.primary } else { pal.primary.linear_multiply(0.35) })
+                                .rounding(Rounding::same(6.0))
+                                .min_size(Vec2::new(110.0, 40.0));
+                                if ui.add_enabled(n > 0, share_btn).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                    share = true;
+                                }
+                                let cancel = egui::Button::new(RichText::new("Hủy").size(14.5).color(pal.text_primary))
+                                    .fill(pal.bg_hover)
+                                    .rounding(Rounding::same(6.0))
+                                    .min_size(Vec2::new(90.0, 40.0));
+                                if ui.add(cancel).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                    open = false;
+                                }
+                            });
+                        });
                     });
             });
-        if let Some((target_id, target_is_group, target_name)) = chosen {
-            if let (Some(msg), Some(tx)) = (self.forward_msg.take(), WORKER_TX.get()) {
-                let _ = tx.send(WorkerCmd::Forward {
-                    target_id,
-                    target_is_group,
-                    msg,
-                    target_name: target_name.clone(),
-                });
-                self.show_toast(format!("Đang chuyển tiếp tới {target_name}…"));
-                self.status_msg = format!("Đang chuyển tiếp tới {target_name}…");
-                ctx.request_repaint();
+        if let Some(p) = backdrop_clicked {
+            if !card.response.rect.contains(p) {
+                open = false;
             }
+        }
+
+        if share {
+            let targets = std::mem::take(&mut self.forward_selected);
+            let note = std::mem::take(&mut self.forward_note);
+            let note = (!note.trim().is_empty()).then(|| note.trim().to_string());
+            if let Some(tx) = WORKER_TX.get() {
+                for (target_id, target_is_group, target_name) in &targets {
+                    let _ = tx.send(WorkerCmd::Forward {
+                        target_id: target_id.clone(),
+                        target_is_group: *target_is_group,
+                        msg: fwd.clone(),
+                        target_name: target_name.clone(),
+                        note: note.clone(),
+                    });
+                }
+            }
+            let msg = if targets.len() == 1 {
+                format!("Đang chia sẻ tới {}…", targets[0].2)
+            } else {
+                format!("Đang chia sẻ tới {} hội thoại…", targets.len())
+            };
+            self.show_toast(msg.clone());
+            self.status_msg = msg;
+            self.forward_msg = None;
+            ctx.request_repaint();
         } else if !open {
             self.forward_msg = None;
+            self.forward_selected.clear();
+            self.forward_note.clear();
         }
     }
 

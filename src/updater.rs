@@ -595,8 +595,167 @@ pub fn parse_github_release_value(
     }
 }
 
-/// Native update notifications are disabled in personal builds.
-pub fn notify_os_new_update(_latest_version: &str, _current_version: &str, _release_title: &str) {}
+/// The `.app` bundle this process runs from (`X.app/Contents/MacOS/<exe>`), if any.
+#[cfg(target_os = "macos")]
+pub fn current_app_bundle() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;
+    let contents = macos_dir.parent()?;
+    let bundle = contents.parent()?;
+    let is_bundle = macos_dir.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app";
+    is_bundle.then(|| bundle.to_path_buf())
+}
+
+/// Detaches a mounted disk image when dropped, so every error path cleans up.
+#[cfg(target_os = "macos")]
+struct MountedDmg(PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Drop for MountedDmg {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("/usr/bin/hdiutil")
+            .args(["detach", "-quiet", "-force"])
+            .arg(&self.0)
+            .status();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_tool(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), String> {
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("Không chạy được {program}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} thất bại ({status})"))
+    }
+}
+
+/// Replace the running `.app` bundle with the one inside a verified release `.dmg`.
+///
+/// The caller must have checked the DMG's SHA-256. Steps: mount read-only, verify the new app's
+/// code signature, copy it next to the current bundle with `ditto`, then swap by renaming
+/// (current → backup, new → current). Any failure before the swap leaves the installed app
+/// untouched; a failed second rename restores the backup.
+#[cfg(target_os = "macos")]
+pub fn install_macos_app_from_dmg(dmg_bytes: &[u8], bundle: &Path) -> Result<(), String> {
+    use std::ffi::OsStr;
+    let parent = bundle
+        .parent()
+        .ok_or_else(|| "Không xác định được thư mục chứa ứng dụng".to_string())?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let work =
+        std::env::temp_dir().join(format!("ctdozlite-update-{}-{nonce}", std::process::id()));
+    crate::data_dir::ensure_private_dir(&work).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), String> {
+        let dmg = work.join("update.dmg");
+        std::fs::write(&dmg, dmg_bytes).map_err(|e| format!("Không ghi được tệp DMG: {e}"))?;
+        let mount = work.join("mnt");
+        std::fs::create_dir_all(&mount).map_err(|e| e.to_string())?;
+        run_tool(
+            "/usr/bin/hdiutil",
+            &[
+                OsStr::new("attach"),
+                OsStr::new("-nobrowse"),
+                OsStr::new("-noautoopen"),
+                OsStr::new("-readonly"),
+                OsStr::new("-mountpoint"),
+                mount.as_os_str(),
+                dmg.as_os_str(),
+            ],
+        )?;
+        let _mounted = MountedDmg(mount.clone());
+        let new_app = std::fs::read_dir(&mount)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| {
+                p.extension().is_some_and(|x| x == "app") && p.join("Contents/Info.plist").is_file()
+            })
+            .ok_or_else(|| "Không tìm thấy ứng dụng .app trong DMG".to_string())?;
+        run_tool(
+            "/usr/bin/codesign",
+            &[
+                OsStr::new("--verify"),
+                OsStr::new("--deep"),
+                OsStr::new("--strict"),
+                new_app.as_os_str(),
+            ],
+        )
+        .map_err(|e| format!("Chữ ký ứng dụng mới không hợp lệ: {e}"))?;
+
+        let staging = parent.join(".ctdozlite-update-staging.app");
+        let backup = parent.join(".ctdozlite-update-backup.app");
+        let _ = std::fs::remove_dir_all(&staging);
+        let _ = std::fs::remove_dir_all(&backup);
+        run_tool(
+            "/usr/bin/ditto",
+            &[new_app.as_os_str(), staging.as_os_str()],
+        )
+        .map_err(|e| format!("Không chép được ứng dụng mới (thiếu quyền ghi?): {e}"))?;
+        if let Err(e) = std::fs::rename(bundle, &backup) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("Không thay được ứng dụng hiện tại: {e}"));
+        }
+        if let Err(e) = std::fs::rename(&staging, bundle) {
+            let _ = std::fs::rename(&backup, bundle);
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("Không cài được ứng dụng mới: {e}"));
+        }
+        let _ = std::fs::remove_dir_all(&backup);
+        let _ = run_tool(
+            "/usr/bin/xattr",
+            &[
+                OsStr::new("-dr"),
+                OsStr::new("com.apple.quarantine"),
+                bundle.as_os_str(),
+            ],
+        );
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+/// Re-open `bundle` once this process has exited (so two instances never share the data dir).
+#[cfg(target_os = "macos")]
+pub fn relaunch_app_bundle_after_exit(bundle: &Path) -> Result<(), String> {
+    let pid = std::process::id().to_string();
+    std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$2\"",
+            "ctdozlite-relaunch",
+            &pid,
+        ])
+        .arg(bundle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Không khởi động lại được ứng dụng: {e}"))
+}
+
+/// Title and body of the "new release available" OS notification.
+pub fn new_update_notification(latest_version: &str, current_version: &str) -> (String, String) {
+    (
+        format!("{} — có bản cập nhật v{latest_version}", crate::APP_DISPLAY_NAME),
+        format!(
+            "Phiên bản mới v{latest_version} đã sẵn sàng (đang dùng v{current_version}). Mở Cài đặt để cập nhật."
+        ),
+    )
+}
 
 #[cfg(test)]
 mod github_api_tests {

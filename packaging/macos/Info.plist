@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>vi</string>
     <key>CFBundleDisplayName</key>
-    <string>ctdozlite</string>
+    <string>ctdozlite-next</string>
     <key>CFBundleExecutable</key>
     <string>ctdozlite</string>
     <key>CFBundleIconFile</key>
@@ -15,7 +15,7 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>ctdozlite</string>
+    <string>ctdozlite-next</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <!-- Sentinel default: CI overwrites this from Cargo.toml before packaging:
