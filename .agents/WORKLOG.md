@@ -736,3 +736,19 @@ Entry template:
     with `gh release edit`, so the installed app shows the list now.
 - Verification: the script output was checked for 0.2.0; workflow YAML validated; the new test
   passes along with the full `cargo test --locked`.
+
+## 2026-11-12 — Release ctdozlite-next v0.2.1  (agent: Claude Code, claude-opus-5-5)
+
+- Request: tag and release (the owner pushed the five feature commits plus a README edit, f2f2df4).
+- Before tagging, the CI on main for f2f2df4 passed (tests only, 1m36s, thanks to the new
+  workflow).
+- `chore(release): v0.2.1` (8347d1a): Cargo.toml/lock 0.2.1, CHANGELOG `[0.2.1] - 2026-11-12`.
+  The "Changed" bullets were rewritten as `**Title:** detail` so `scripts/release_notes.py`
+  yields short lines. Tag v0.2.1 was pushed; run 43078053535 passed every job (~9 min) and
+  published "ctdozlite-next v0.2.1" with 14 assets and a body generated from the CHANGELOG.
+- Verification: downloaded the arm64 DMG. SHA256SUMS OK; codesign --deep --strict OK;
+  CFBundleShortVersionString 0.2.1; CFBundleDisplayName ctdozlite-next;
+  `--version` → "ctdozlite-next v0.2.1"; `--check-update` reached the fork's releases and reported
+  it is the latest.
+- Note: v0.2.0 has no updater, so the owner installs v0.2.1 by hand once. From v0.2.1 on the in-app
+  updater handles it (the macOS in-place swap is first exercised by v0.2.2).
