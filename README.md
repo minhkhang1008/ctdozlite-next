@@ -1,6 +1,6 @@
 # ctdozlite-next
 
-Client Zalo desktop gọn nhẹ viết bằng Rust, là phiên bản tôi tự phát triển từ
+Client Zalo desktop gọn nhẹ viết bằng Rust, là phiên bản tự phát triển từ
 [ctdozlite](https://github.com/ctdoteam1110/ctdozlite) theo trải nghiệm và nhu cầu cá nhân,
 tập trung vào **macOS**.
 
@@ -8,7 +8,7 @@ tập trung vào **macOS**.
 - Giao diện `egui` theo phong cách Zalo PC; lịch sử tin nhắn lưu cục bộ bằng SQLite.
 
 > [!NOTE]
-> Dự án cá nhân, phi thương mại, không liên quan tới VNG hay Zalo. Bạn tự chịu trách nhiệm khi sử dụng.
+> Dự án cá nhân, phi thương mại, không liên quan tới VNG hay Zalo. Bản thân người dùng tự chịu trách nhiệm khi sử dụng.
 
 ## Khác gì so với bản gốc
 
