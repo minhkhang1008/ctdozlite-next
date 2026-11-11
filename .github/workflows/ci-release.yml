@@ -437,6 +437,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Build provenance: lets anyone run `gh attestation verify <file> --repo <owner/repo>`
+      # to confirm a download was built by this public workflow from this repository.
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
@@ -503,6 +507,17 @@ jobs:
           set -euo pipefail
           python3 src_checkout/scripts/release_notes.py "$VERSION" src_checkout/CHANGELOG.md "${{ github.repository }}" > release_notes.md
           cat release_notes.md
+      - name: Attest build provenance of the release files
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release_assets/*.dmg
+            release_assets/*.exe
+            release_assets/*.zip
+            release_assets/*.deb
+            release_assets/*.rpm
+            release_assets/*.AppImage
+            release_assets/*.tar.gz
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -511,3 +526,26 @@ jobs:
           files: release_assets/*
           generate_release_notes: false
           body_path: release_notes.md
+      # Keep the Homebrew tap's cask on the new version. Runs only when the repo secret
+      # HOMEBREW_TAP_TOKEN (fine-grained PAT: contents read/write on minhkhang1008/homebrew-tap)
+      # is set; otherwise the step is skipped and the cask is bumped by hand.
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: env.TAP_TOKEN != ''
+        run: |
+          set -euo pipefail
+          sums=release_assets/SHA256SUMS.txt
+          sha_for() { awk -v f="ctdozlite-${VERSION}-$1.dmg" '{ n = $2; sub(/^\*/, "", n); sub(/^\.\//, "", n); if (n == f) print $1 }' "$sums"; }
+          arm="$(sha_for macos-arm64)"; intel="$(sha_for macos-x86_64)"
+          test -n "$arm" && test -n "$intel"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/minhkhang1008/homebrew-tap.git" tap
+          cask=tap/Casks/ctdozlite-next.rb
+          sed -i -E "s/^  version \"[^\"]+\"/  version \"${VERSION}\"/" "$cask"
+          sed -i -E "s/(sha256 arm: +\")[0-9a-f]{64}/\1${arm}/" "$cask"
+          sed -i -E "s/(intel: +\")[0-9a-f]{64}/\1${intel}/" "$cask"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "ctdozlite-next ${VERSION}" || exit 0
+          git push

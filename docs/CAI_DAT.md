@@ -2,7 +2,20 @@
 
 ## Cài bản dựng sẵn (macOS)
 
-**Khuyên dùng — một lệnh, không bị Gatekeeper chặn:**
+**Homebrew:**
+
+```bash
+brew tap minhkhang1008/tap
+brew trust minhkhang1008/tap     # Homebrew yêu cầu bạn xác nhận tin tap bên thứ ba
+brew install --cask ctdozlite-next
+```
+
+Homebrew bắt buộc xác nhận tin cậy (`brew trust`) với mọi tap ngoài kho chính thức. Tap
+[`minhkhang1008/homebrew-tap`](https://github.com/minhkhang1008/homebrew-tap) chỉ có một tệp cask: tải
+`.dmg` từ GitHub Releases (Homebrew đối chiếu SHA-256), cài vào Applications và gỡ cờ cách ly cho app.
+
+**Hoặc một lệnh, không bị Gatekeeper chặn** (script hỏi trước khi cài; muốn đọc trước thì tải về bằng
+`curl -fsSLO <đường dẫn bên dưới>` rồi mở ra xem):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/scripts/install-macos.sh | bash
@@ -11,7 +24,9 @@ curl -fsSL https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/s
 Script (`scripts/install-macos.sh`) tải bản mới nhất đúng chip, đối chiếu SHA-256 với
 `SHA256SUMS.txt`, chép `ctdozlite.app` vào `/Applications`, gỡ cờ cách ly rồi mở app. Gatekeeper chỉ
 chặn tệp có cờ `com.apple.quarantine` mà trình duyệt gắn vào; `curl` không gắn cờ này. Tuỳ chọn:
-`CTDOZ_VERSION=0.2.1` (cài bản cụ thể), `CTDOZ_APP_DIR=~/Applications`, `CTDOZ_NO_OPEN=1`.
+`CTDOZ_VERSION=0.2.1` (cài bản cụ thể), `CTDOZ_APP_DIR=~/Applications`, `CTDOZ_YES=1` (không hỏi),
+`CTDOZ_NO_OPEN=1`. Kiểm tra nguồn gốc tệp: `gh attestation verify <tệp> --repo minhkhang1008/ctdozlite-next`
+(xem mục "An toàn & minh bạch" trong README).
 
 Vì sao không ký "thật": muốn macOS mở app tải bằng trình duyệt mà không hỏi, app phải được ký
 Developer ID **và** công chứng với Apple — cần Apple Developer Program (99 USD/năm). Từ macOS 15, mẹo

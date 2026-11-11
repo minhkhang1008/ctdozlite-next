@@ -30,15 +30,30 @@ Danh sách đầy đủ: [CHANGELOG](CHANGELOG.md).
 
 ## Cài đặt
 
-**Cách nhanh nhất (khuyên dùng):** dán vào Terminal:
+**Homebrew (quen thuộc nhất với người dùng Mac):**
+
+```bash
+brew tap minhkhang1008/tap
+brew trust minhkhang1008/tap     # Homebrew yêu cầu bạn xác nhận tin tap bên thứ ba
+brew install --cask ctdozlite-next
+```
+
+`brew trust` là bước Homebrew bắt buộc với mọi tap ngoài kho chính thức; tap này chỉ chứa
+[một tệp cask](https://github.com/minhkhang1008/homebrew-tap/blob/main/Casks/ctdozlite-next.rb) đọc được.
+
+**Hoặc trình cài đặt một lệnh** (đọc được toàn bộ, in rõ từng bước và hỏi trước khi cài):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/scripts/install-macos.sh | bash
 ```
 
-Script tải bản mới nhất đúng chip (Apple Silicon/Intel), kiểm tra SHA-256, cài vào Applications và mở
-app. Vì tải bằng `curl`, macOS **không** chặn app như khi tải bằng trình duyệt (app chưa được Apple
-công chứng). Chạy lại lệnh này bất cứ lúc nào để cài lại; các bản sau app tự cập nhật.
+Muốn xem trước rồi mới chạy:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/minhkhang1008/ctdozlite-next/main/scripts/install-macos.sh
+less install-macos.sh      # đọc nội dung
+bash install-macos.sh
+```
 
 **Tải `.dmg` thủ công:** vào [Releases](https://github.com/minhkhang1008/ctdozlite-next/releases), tải
 `ctdozlite-<phiên bản>-macos-arm64.dmg` (Apple Silicon) hoặc `-x86_64` (Intel), kéo app vào
@@ -55,6 +70,23 @@ bash packaging/package-local.sh               # đóng gói .dmg vào dist/
 ```
 
 Chi tiết: [Cài đặt & phát hành](docs/CAI_DAT.md).
+
+### An toàn & minh bạch
+
+ctdozlite-next chưa được Apple "công chứng" (việc này cần tài khoản trả phí 99 USD/năm), nên macOS
+chặn app khi tải bằng trình duyệt. Thay vì yêu cầu bạn tắt bảo vệ của macOS, mọi bước đều kiểm chứng được:
+
+- **Mã nguồn mở:** toàn bộ mã của app và [trình cài đặt](scripts/install-macos.sh) nằm trong repo này.
+- **Build công khai:** mọi tệp cài đặt được [GitHub Actions](https://github.com/minhkhang1008/ctdozlite-next/actions)
+  build từ mã nguồn, không build trên máy cá nhân.
+- **Kiểm tra được nguồn gốc:** mỗi bản phát hành có `SHA256SUMS.txt`; từ v0.2.2 có thêm chứng nhận nguồn gốc của GitHub.
+  Có `gh` (GitHub CLI) thì chạy:
+  `gh attestation verify ctdozlite-<phiên bản>-macos-arm64.dmg --repo minhkhang1008/ctdozlite-next`
+  — kết quả "Verification succeeded" nghĩa là tệp đúng do workflow của repo này build ra.
+- **Trình cài đặt chỉ làm 5 việc:** tải `.dmg` từ GitHub Releases → đối chiếu SHA-256 → kiểm tra chữ ký
+  → chép vào Applications → gỡ cờ "tải từ Internet" cho riêng app này. Không cài dịch vụ chạy nền,
+  không sửa cài đặt hệ thống, không tắt Gatekeeper, không gửi dữ liệu đi đâu.
+- **Gỡ cài đặt:** kéo `ctdozlite.app` vào Thùng rác (dữ liệu ở `~/Library/Application Support/ctdozlite`).
 
 ## Sử dụng nhanh
 

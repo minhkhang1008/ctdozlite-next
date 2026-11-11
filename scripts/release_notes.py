@@ -65,12 +65,17 @@ def build(version: str, changelog: str, repo: str) -> str:
         "macOS: chọn `-macos-arm64.dmg` (Apple Silicon), `-macos-x86_64.dmg` (Intel) "
         "hoặc `-macos.dmg` (Universal).",
         "",
-        "**Cài trên macOS không bị chặn** (dán vào Terminal):",
+        "**Cài trên macOS không bị chặn** — Homebrew hoặc trình cài đặt mã nguồn mở "
+        "(kiểm tra SHA-256 + chữ ký, hỏi trước khi cài):",
         "",
         "```bash",
+        "brew tap minhkhang1008/tap && brew trust minhkhang1008/tap && brew install --cask ctdozlite-next",
         f"curl -fsSL https://raw.githubusercontent.com/{repo or 'minhkhang1008/ctdozlite-next'}"
         "/main/scripts/install-macos.sh | bash",
         "```",
+        "",
+        "Kiểm tra nguồn gốc tệp: `gh attestation verify <tệp> --repo "
+        f"{repo or 'minhkhang1008/ctdozlite-next'}`.",
     ]
     return "\n".join(out).replace("\n\n\n", "\n\n") + "\n"
 

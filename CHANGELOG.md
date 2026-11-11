@@ -9,7 +9,8 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 ## [Unreleased]
 
 ### Added (Tính năng mới)
-- **Cài trên macOS không bị Gatekeeper chặn, miễn phí:** `scripts/install-macos.sh` (một lệnh `curl … | bash`) tải bản mới nhất đúng chip, kiểm tra SHA-256, cài vào Applications và gỡ cờ cách ly; kèm mẫu Homebrew Cask (`packaging/homebrew/`) cho tap riêng.
+- **Cài trên macOS không bị Gatekeeper chặn, miễn phí:** Homebrew tap `minhkhang1008/tap` hoặc trình cài đặt mã nguồn mở `scripts/install-macos.sh` (một lệnh `curl … | bash`): in rõ từng bước, kiểm tra SHA-256 và chữ ký, hỏi trước khi cài, chỉ gỡ cờ cách ly cho riêng app.
+- **Chứng nhận nguồn gốc bản build:** mỗi tệp phát hành được GitHub chứng nhận do workflow công khai build ra (`gh attestation verify <tệp> --repo minhkhang1008/ctdozlite-next`); tap Homebrew tự cập nhật theo bản phát hành khi có secret `HOMEBREW_TAP_TOKEN`.
 
 ## [0.2.1] - 2026-11-12
 

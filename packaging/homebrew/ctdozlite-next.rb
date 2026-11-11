@@ -20,16 +20,15 @@ cask "ctdozlite-next" do
   desc "Lightweight native Zalo desktop client written in Rust"
   homepage "https://github.com/minhkhang1008/ctdozlite-next"
 
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
   # The app updates itself from GitHub Releases.
   auto_updates true
 
   app "ctdozlite.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-cr", "#{appdir}/ctdozlite.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-cr", "{{appdir}}/ctdozlite.app"]
   end
 
   zap trash: "~/Library/Application Support/ctdozlite"

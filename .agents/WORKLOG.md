@@ -779,3 +779,32 @@ Entry template:
   SHA-256 OK, the app was installed with 0 quarantine attributes, codesign verify OK, version
   0.2.1. `ruby -c` on the cask is OK; brew install is not tested (no tap). The one-liner URL only
   works once `scripts/install-macos.sh` is on main.
+
+## 2026-11-12 — Make the free macOS install look and be trustworthy; Homebrew tap  (agent: Claude Code, claude-opus-5-5)
+
+- Request: go ahead (tap + install path), but design it so users do not suspect malware.
+- Changes:
+  - `scripts/install-macos.sh` rewritten for transparency. A Vietnamese header lists exactly the 5
+    steps and what it does NOT do. It prints version, source URL and target, and numbers each step
+    [1/5]…[5/5]. It verifies SHA-256 and `codesign --verify --deep --strict`, asks Y/n via /dev/tty
+    (works under `curl | bash`; `CTDOZ_YES=1` skips), uses sudo only if needed with an explanation,
+    and removes only `com.apple.quarantine` from this app (`xattr -dr`, not `-cr`). It ends with
+    uninstall instructions. Tested into a temp dir: OK, 0 quarantine xattrs.
+  - CI release job: `actions/attest-build-provenance@v2` over the installer files
+    (`id-token`/`attestations: write`), so `gh attestation verify <file> --repo …` works from
+    v0.2.2. A new optional "Update Homebrew tap" step bumps version + per-arch SHA-256 in the tap
+    and pushes, gated on secret `HOMEBREW_TAP_TOKEN` (the sed bump was tested on a copy).
+  - Created public repo `minhkhang1008/homebrew-tap` (owner approved) with an English README
+    explaining exactly what the cask does, and `Casks/ctdozlite-next.rb`. Current Homebrew
+    required `depends_on macos: :big_sur` (not the string form) and `postflight_steps { run
+    "/usr/bin/xattr", args: ["-cr", "{{appdir}}/ctdozlite.app"] }` (old `postflight` is deprecated;
+    `run` args expand `{{appdir}}`, checked in Homebrew's install_steps.rb). `brew info` is clean;
+    `brew fetch` downloaded and matched SHA-256. The tap was untapped/untrusted afterwards.
+    `brew style` shows only generic Sorbet/frozen-string-literal sigil notes.
+  - Homebrew now refuses third-party taps until `brew trust <tap>`; the docs show
+    `brew tap … && brew trust … && brew install --cask ctdozlite-next` and explain why.
+  - README "An toàn & minh bạch" section (open source, public CI build, SHA256SUMS, attestation from
+    v0.2.2, exactly what the installer does, uninstall) plus a "read first, then run" option.
+    CAI_DAT, release_notes.py footer and CHANGELOG updated.
+- Not done: brew install itself (it would replace the owner's /Applications app);
+  `HOMEBREW_TAP_TOKEN` must be created by the owner.
