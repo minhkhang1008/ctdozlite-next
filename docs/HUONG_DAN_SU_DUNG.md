@@ -44,7 +44,13 @@ Trên macOS, bản `.app` mặc định lưu dữ liệu trong `~/Library/Applic
   - Tab **Kho nhãn** cho phép duyệt và ghim các bộ nhãn dán từ máy chủ Zalo.
 - **Tương tác trên tin nhắn:**
   - Nhấp chuột phải vào bong bóng tin nhắn để thả cảm xúc (reaction), trả lời trích dẫn, chuyển tiếp, sao chép nội dung, ghim, đánh dấu sao, thu hồi tin nhắn với mọi người hoặc xóa ở phía cá nhân.
-  - Hỗ trợ dán ảnh trực tiếp từ clipboard (`Ctrl+V` / `Cmd+V`) vào khung chat.
+  - **Nhấp đúp** vào một tin nhắn để trả lời nhanh. Trong nhóm, ô soạn tin tự chèn `@Tên` người gửi ở đầu (có thể xoá như tag thường). Nhấn `Esc` hoặc nút `✕` để thoát chế độ trả lời.
+  - Rê chuột vào cảm xúc dưới tin nhắn để xem tên người đã thả; bấm vào để mở hộp thoại **Biểu cảm** (lọc theo từng loại cảm xúc).
+- **Nhắc tên (@mention) trong nhóm:** gõ `@` để mở danh sách thành viên, dùng `↑`/`↓` để chọn, `Tab`/`Enter` để chèn, `Esc` để đóng. Tag hiển thị màu xanh và người được tag sẽ nhận thông báo.
+- **Tìm và gửi GIF:** gõ `@gif` để xem GIF xu hướng, hoặc `@gif <từ khoá>` (ví dụ `@gif hello`) để tìm. Dùng phím mũi tên để chọn, `Enter` để gửi, `Esc` để đóng; bấm chuột vào GIF cũng gửi ngay. Bật/tắt ở **Cài đặt → Tiện ích → Gợi ý @ → Tìm kiếm GIF**.
+- **Ảnh và tệp:**
+  - Dán ảnh trực tiếp từ clipboard (`Ctrl+V` trên Windows/Linux, `⌘V` trên macOS): ảnh chụp màn hình, ảnh copy từ trình duyệt/Preview, hoặc tệp ảnh copy trong Finder. Ảnh hiện ở khung xem trước, nhập chú thích rồi nhấn `Enter` để gửi.
+  - **Kéo-thả tệp** vào cửa sổ chat: khi kéo, khung chat hiện hai vùng — thả vào vùng tin nhắn (**Gửi nhanh**) để gửi ngay, hoặc thả vào ô soạn tin (**Xem trước khi gửi**) để đính kèm, xem lại, nhập chú thích rồi nhấn `Enter`. Vùng đang trỏ chuột được tô sáng.
 
 ### 2.3. Gọi thoại và gọi video 1-1
 - Trong cuộc trò chuyện cá nhân, bấm biểu tượng điện thoại hoặc máy quay ở góc phải thanh tiêu đề hội thoại để bắt đầu cuộc gọi.

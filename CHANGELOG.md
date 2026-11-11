@@ -5,6 +5,33 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+> Bản fork cá nhân `minhkhang1008/ctdozlite` (tối ưu macOS). Các thay đổi giao thức có bằng chứng trong `re-notes/38`, `re-notes/39`.
+
+### Security (Bảo mật)
+- **Tắt tự động cập nhật và REST API/MCP (`src/updater.rs`, `src/api_mcp.rs`):** Không còn kết nối tới GitHub API hay mở cổng HTTP cục bộ.
+- **Danh sách domain cho phép (`src/session.rs`):** Mọi request mang `zpw_sek`/cookie phiên (HTTP, WebSocket, đồng bộ lịch sử, upload multipart) đều kiểm tra `is_trusted_zalo_url` (`*.zalo.me`, `*.zaloapp.com`, `*.zadn.vn`, `*.zdn.vn`).
+- **Quyền tệp & giới hạn bộ nhớ:** `session.json`, `zalo_history.db` và tệp tạm khi giải mã giữ quyền `0600` (thư mục `0700`); luồng giải nén đồng bộ lịch sử có trần dung lượng RAM.
+
+### Added (Tính năng mới)
+- **Tìm và gửi GIF bằng lệnh `@gif` (`src/chat.rs`, `src/gui/workspace.rs`):** `@gif` hiện GIF xu hướng, `@gif <từ khoá>` tìm GIF (Giphy qua máy chủ Zalo); chọn bằng phím mũi tên/chuột, `Enter` để gửi. Công tắc "Tìm kiếm GIF" trong Cài đặt nay có tác dụng thật. Giao thức: `re-notes/39_gif_search_send.md`.
+- **Dán ảnh `⌘V` trên macOS (`src/gui/macos_clipboard.rs`):** Đọc ảnh trực tiếp từ `NSPasteboard` (PNG, TIFF, tệp ảnh copy trong Finder) thay cho `osascript`; bắt phím `⌘V` cả khi clipboard chỉ có ảnh.
+- **Kéo-thả tệp hai vùng (`src/gui/workspace.rs`, `src/gui/macos_drag.rs`):** Khi kéo tệp vào, khung chat hiện vùng **Gửi nhanh** (gửi ngay) và **Xem trước khi gửi** (đính kèm, thêm chú thích); vùng đang trỏ chuột được tô sáng.
+- **Nhấp đúp để trả lời (`src/gui/workspace.rs`):** Vào chế độ trả lời, trong nhóm tự chèn `@Tên` người gửi (xoá được); `Esc` để thoát. Tin trả lời trong nhóm gửi kèm `mentionInfo` để tag hoạt động thật.
+- **Nhắc tên (@mention) trong nhóm:** Gửi tag thật qua `group/mention`; tag hiển thị màu xanh trong bong bóng và ngay trong ô soạn tin; điều hướng danh sách gợi ý bằng `↑`/`↓`/`Tab`/`Enter`. Giao thức: `re-notes/38_group_mentions.md`.
+- **Xem ai đã thả cảm xúc (`src/gui/reactions_dialog.rs`):** Tooltip hiện tên người thả khi rê chuột; hộp thoại **Biểu cảm** kiểu Zalo PC với tab theo từng loại cảm xúc.
+- **Thông báo tin nhắn mới bằng Notification Center của macOS (`src/native_notifications.rs`):** Thay popup tự vẽ; không thông báo tin do chính mình gửi.
+- **Emoji màu từ font hệ thống (`src/emoji_raster.rs`)** và emoji cỡ lớn khi tin nhắn chỉ có emoji.
+
+### Changed (Thay đổi)
+- **Giao diện theo Zalo PC:** Bảng màu sáng/tối, thanh điều hướng, danh sách hội thoại, bong bóng tin nhắn và ô soạn tin theo kích thước/màu của chat.zalo.me.
+- **Liên kết trong tin nhắn:** URL trần hiển thị màu xanh, gạch chân khi rê chuột và bấm được.
+
+### Fixed (Sửa lỗi)
+- **Mất toàn bộ tin nhắn cũ khi khởi động lại hoặc đăng nhập lại; "Đồng bộ tin nhắn" như không có tác dụng (`src/account_manager.rs`, `src/store.rs`):** Lịch sử từng bị tách giữa `zalo_history.db` (nơi ghi) và `accounts/<uin>_history.db` (nơi đọc và nơi đồng bộ điện thoại ghi vào). Nay tài khoản đang đăng nhập chỉ dùng `zalo_history.db`; đăng nhập lại sẽ khôi phục bản đã cất, dữ liệu bị tách từ bản cũ được gộp một lần (không trùng, không mất tin).
+- **Không kéo giãn được cột danh sách hội thoại:** Hàng hội thoại rộng hơn vùng cuộn 2px khiến panel tự nới ra sau mỗi lần vẽ.
+- **Phím ↑/↓/Tab/Enter của danh sách @ không hoạt động ở lần dùng đầu tiên trên macOS:** Sự kiện IME `Enabled` bị hiểu nhầm là đang gõ dấu.
+- **Căn lề bong bóng tin nhắn đến không có ảnh đại diện.**
+
 ## [0.1.0] - 2026-11-09
 
 ### Added (Tính năng mới & Cập nhật)

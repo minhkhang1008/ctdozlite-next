@@ -9,6 +9,17 @@ Client Zalo Desktop viết bằng Rust (`eframe`/`egui` + `ratatui`), giao tiế
 - **Gói cài đặt dựng sẵn (Releases):** [https://github.com/ctdoteam1110/ctdozlite/releases](https://github.com/ctdoteam1110/ctdozlite/releases)
 - **Tính năng nào đang chạy?** [Tính năng & giới hạn](docs/TINH_NANG.md) · [Đã biết](docs/DA_BIET.md) · [Xử lý sự cố](docs/KHAC_PHUC_SU_CO.md)
 
+> [!IMPORTANT]
+> **Bản fork cá nhân (`minhkhang1008/ctdozlite`, tối ưu cho macOS).** Khác với bản gốc
+> [`ctdoteam1110/ctdozlite`](https://github.com/ctdoteam1110/ctdozlite):
+> - **Bảo mật:** tắt tự động cập nhật và REST API/MCP; mọi request mang `zpw_sek`/cookie chỉ được gửi tới
+>   domain Zalo trong danh sách cho phép; tệp nhạy cảm giữ quyền `0600`/`0700`.
+> - **Giao diện kiểu Zalo PC:** thông báo hệ thống macOS, dán ảnh `⌘V`, kéo-thả tệp (Gửi nhanh / Xem trước),
+>   nhấp đúp để trả lời kèm `@tag`, tìm và gửi GIF bằng `@gif`, xem ai đã thả cảm xúc.
+> - **Lịch sử bền vững:** tin nhắn cũ không còn mất khi khởi động lại hoặc đăng nhập lại.
+>
+> Chi tiết xem [CHANGELOG](CHANGELOG.md#unreleased).
+
 > Chưa rõ tính năng bạn cần đã hoạt động chưa? Đọc [Tính năng & giới hạn](docs/TINH_NANG.md) **trước khi** mở issue — bảng đó ghi rõ cái gì đang chạy, cái gì chỉ chạy một phần và issue nào đang theo dõi.
 
 
@@ -94,13 +105,13 @@ src/ (67,999 lines across 49 files)
 ├── media.rs           # (3,383 lines) Đóng gói/giải mã RTP/RTCP, H.264 FU-A và luồng webcam/video
 ├── gui.rs             # (3,244 lines) Khởi tạo trạng thái ZaloGuiApp, bộ lọc, đồng bộ & vòng lặp sự kiện
 ├── tui.rs             # (2,847 lines) Giao diện dòng lệnh (ratatui)
-├── store.rs           # (1,995 lines) Lưu trữ SQLite theo từng tài khoản (accounts/<uin>_history.db)
+├── store.rs           # (1,995 lines) Lưu trữ SQLite (zalo_history.db của tài khoản đang đăng nhập)
 ├── session.rs         # (1,846 lines) Quản lý phiên, cookie jar (zpw_sek), khóa (zpw_enk), proxy & multi-profile
 ├── history_sync.rs    # (1,246 lines) Đồng bộ lịch sử, giải mã RSA 2048 + AES-256 + LZMA2 & Sync v2 Curve25519
 ├── reactions.rs       # (1,077 lines) Quản lý trạng thái thả cảm xúc (reaction) tin nhắn
 ├── zproto_host.rs     # (1,037 lines) Wasmtime host chạy module libzproto_wasm giải mã Sync v2 di động
-├── api_mcp.rs         # (947 lines)   Máy chủ HTTP REST API cục bộ & giao thức MCP (JSON-RPC 2.0)
-├── updater.rs         # (768 lines)   Tự động kiểm tra, tải và xác thực chữ ký/SHA-256 bản cập nhật GitHub
+├── api_mcp.rs         # (947 lines)   HTTP REST API cục bộ & MCP (JSON-RPC 2.0) — đã tắt trong bản fork
+├── updater.rs         # (768 lines)   Kiểm tra bản cập nhật GitHub — đã tắt trong bản fork
 ├── voip_log.rs        # (661 lines)   Ghi nhận chẩn đoán luồng gói tin RTP/RTCP (voip.log)
 ├── socket.rs          # (653 lines)   Kết nối WebSocket thời gian thực (zpw_ws)
 ├── unread.rs          # (644 lines)   Theo dõi bộ đếm tin nhắn chưa đọc và trạng thái tắt thông báo (mute)
@@ -114,12 +125,13 @@ src/ (67,999 lines across 49 files)
 ├── native_notifications.rs # (375 lines) Thông báo native desktop (Windows toast, macOS, Linux notify)
 ├── message_model.rs   # (329 lines)   Mô hình định danh và hợp nhất trạng thái tin nhắn
 ├── clipboard_dib.rs   # (297 lines)   Đọc ảnh bitmap trực tiếp từ Windows clipboard (CF_DIB)
+├── emoji_raster.rs    # Vẽ emoji màu từ font hệ thống thành texture
 ├── logger.rs          # (255 lines)   Bộ thu thập log mạng và quét mã lỗi cho chế độ --dev
 ├── param_cipher.rs    # (222 lines)   Mã hóa tham số xác thực ParamCipher v2 (zcid, zcid_ext, encrypt_key)
 ├── crypto.rs          # (146 lines)   AES-128/256-CBC, PKCS7, MD5 và hàm tạo chữ ký signkey
 ├── audio.rs           # (142 lines)   Thu/phát âm thanh thời gian thực (cpal + libopus)
 ├── message_navigation.rs # (142 lines) Điều hướng nhanh tới tin nhắn trích dẫn trong hội thoại
-├── account_manager.rs # (141 lines)   Quản lý đa tài khoản, lưu và chuyển đổi profile tức thì
+├── account_manager.rs # (336 lines)   Đa tài khoản: cất/khôi phục lịch sử theo UIN, chuyển profile
 ├── clock.rs           # (121 lines)   Đồng hồ hiển thị thời gian và trạng thái hệ thống
 ├── ui.rs              # (113 lines)   Thành phần UI chia sẻ giữa các giao diện
 ├── endpoints.rs       # (56 lines)    Bảng định tuyến các domain máy chủ Zalo (Service Map)
@@ -130,7 +142,9 @@ src/ (67,999 lines across 49 files)
     ├── messages.rs    # (3,439 lines) Render bong bóng tin nhắn, Markdown/RTF, reaction, quote, ảnh clipboard
     ├── stickers.rs    # (1,844 lines) Sticker picker, auto-suggest & bộ lọc nhãn dán
     ├── theme.rs       # (1,152 lines) Bảng màu Dark/Light, vector icon Lucide, nạp font hệ thống
-    └── reactions_dialog.rs # (235 lines) Hộp thoại hiển thị chi tiết danh sách người thả cảm xúc
+    ├── reactions_dialog.rs # Hộp thoại "Biểu cảm": người thả cảm xúc theo từng loại
+    ├── macos_clipboard.rs  # macOS: bắt ⌘V qua NSEvent và đọc ảnh từ NSPasteboard
+    └── macos_drag.rs       # macOS: vị trí chuột khi kéo-thả tệp từ Finder
 ```
 ---
 
