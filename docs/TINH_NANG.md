@@ -8,8 +8,8 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 
 | Tính năng | | Ghi chú |
 |---|---|---|
-| Đăng nhập bằng mã QR | ✅ | Quét bằng app Zalo trên điện thoại |
-| Đăng nhập bằng số điện thoại + mật khẩu | ✅ | `--phone`, `--pass` |
+| Đăng nhập bằng mã QR | ✅ | Quét bằng app Zalo trên điện thoại; mã tự làm mới trước khi hết hạn (đếm ngược), kèm hướng dẫn khi điện thoại báo không kết nối được máy chủ |
+| Đăng nhập bằng số điện thoại + mật khẩu | 🚫 | Đã bỏ khỏi giao diện; chỉ còn ở chế độ dòng lệnh (`--tui --phone … --pass …`) |
 | Tự khôi phục phiên khi mở lại app | ✅ | Lỗi mạng tạm thời không làm mất phiên |
 | Lịch sử tin nhắn cục bộ | ✅ | `zalo_history.db`; giữ nguyên khi tắt app, đăng xuất hay đăng nhập lại |
 | Nhiều tài khoản | ✅ | Mỗi tài khoản một thư mục `--data-dir` |
@@ -42,6 +42,7 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 | Tính năng | | Ghi chú |
 |---|---|---|
 | Danh sách hội thoại (bạn bè, nhóm, Cloud của tôi) | ✅ | Kéo giãn được cột danh sách |
+| Phân loại hội thoại | 🟡 | Hiện và lọc theo nhãn trong tài khoản Zalo (thẻ màu, nút **Phân loại ▾**); gán/sửa nhãn vẫn làm trên điện thoại hoặc Zalo PC |
 | Ghim / tắt thông báo / ẩn / xoá lịch sử hội thoại | ✅ | Chuột phải vào hội thoại |
 | Tìm hội thoại & nội dung tin nhắn | ✅ | Tìm được cả khi gõ không dấu |
 | Tìm người bằng số điện thoại, kết bạn | ✅ | |
@@ -58,7 +59,7 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 
 | Tính năng | | Ghi chú |
 |---|---|---|
-| Giao diện đồ hoạ kiểu Zalo PC, sáng/tối | ✅ | Tuỳ chỉnh màu qua `theme.json` |
+| Giao diện đồ hoạ kiểu Zalo PC, sáng/tối | ✅ | Mở toàn màn hình; tuỳ chỉnh màu qua `theme.json` |
 | Giao diện terminal (TUI) | ✅ | `--tui` |
 | Thông báo tin nhắn mới (macOS) | ✅ | Notification Center; không thông báo tin của chính mình |
 | Emoji màu, hiển thị tiếng Việt/CJK | ✅ | Dùng font hệ thống |

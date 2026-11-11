@@ -675,6 +675,7 @@ impl ZaloGuiApp {
                                         }
                                     }
                                 }
+                                self.render_sidebar_label_filter(ui, pal);
                             });
                         }
                     });
@@ -780,7 +781,14 @@ impl ZaloGuiApp {
                                 || !query.is_empty()
                                 || *idx == self.selected_thread_index;
 
+                            // "Phân loại": keep threads carrying any selected account label.
+                            let pass_label = self.sidebar_label_filter.is_empty()
+                                || self.conv_labels.iter().any(|l| {
+                                    self.sidebar_label_filter.contains(&l.id)
+                                        && l.contains(&t.id, t.is_group)
+                                });
                             pass_filter
+                                && pass_label
                                 && not_hidden
                                 && has_messages
                                 && (query.is_empty()
@@ -867,7 +875,6 @@ impl ZaloGuiApp {
                 #[derive(Clone)]
                 enum ThreadCtxAction {
                     TogglePin(String, bool, bool),
-                    SetLabel(String, Option<String>),
                     ToggleUnread(String, bool, bool),
                     SetMute(String, bool, Option<i64>, String),
                     ToggleHide(String, bool, bool),
@@ -908,7 +915,18 @@ impl ZaloGuiApp {
                                 || t.unread.is_muted();
                             let is_hidden = self.settings.hidden_threads.contains(&t.id)
                                 || t.presentation.hidden;
-                            let cur_label = self.settings.thread_labels.get(&t.id).cloned();
+                            // Account label (from Zalo `convlabel/get`) shown as a coloured tag.
+                            let cur_label: Option<(String, Color32)> = self
+                                .conv_labels
+                                .iter()
+                                .find(|l| l.contains(&t.id, t.is_group))
+                                .map(|l| (l.text.clone(), label_color(&l.color, pal.primary)));
+                            let thread_label_ids: Vec<i64> = self
+                                .conv_labels
+                                .iter()
+                                .filter(|l| l.contains(&t.id, t.is_group))
+                                .map(|l| l.id)
+                                .collect();
                             // Zalo PC: 70px row card inside a 4px/8px margin (78px slot).
                             let row_height = if is_narrow_w { 56.0 } else { 78.0 };
                             let (alloc_rect, row_resp) = ui.allocate_exact_size(
@@ -1029,20 +1047,20 @@ impl ZaloGuiApp {
                                         );
                                     }
                                 }
-                                if let Some(ref lbl) = cur_label {
-                                    let tag_col = match lbl.as_str() {
-                                        "Khách hàng" => Color32::from_rgb(239, 68, 68),
-                                        "Gia đình" => Color32::from_rgb(34, 197, 94),
-                                        "Công việc" => Color32::from_rgb(249, 115, 22),
-                                        "Bạn bè" => Color32::from_rgb(168, 85, 247),
-                                        "Trả lời sau" => Color32::from_rgb(234, 179, 8),
-                                        _ => Color32::from_rgb(59, 130, 246),
-                                    };
-                                    ui.painter().circle_filled(
-                                        Pos2::new(text_left - 8.0, row_rect.top() + 49.5),
-                                        3.5,
+                                if let Some((_, tag_col)) = cur_label {
+                                    // Small tag shape like Zalo's label marker.
+                                    let c = Pos2::new(text_left - 9.0, row_rect.top() + 49.5);
+                                    let body = Rect::from_center_size(c, Vec2::new(9.0, 7.0));
+                                    ui.painter().rect_filled(body, Rounding::same(1.5), tag_col);
+                                    ui.painter().add(egui::Shape::convex_polygon(
+                                        vec![
+                                            Pos2::new(body.right(), body.top()),
+                                            Pos2::new(body.right() + 3.5, c.y),
+                                            Pos2::new(body.right(), body.bottom()),
+                                        ],
                                         tag_col,
-                                    );
+                                        Stroke::NONE,
+                                    ));
                                 }
 
                                 // Snippet with `Bạn:` prefix when latest message is outgoing
@@ -1190,66 +1208,52 @@ impl ZaloGuiApp {
                                         ui.set_min_width(185.0);
                                         ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
                                         ui.spacing_mut().button_padding = Vec2::new(10.0, 6.0);
-                                        let categories = [
-                                            ("Khách hàng", Color32::from_rgb(239, 68, 68)),
-                                            ("Gia đình", Color32::from_rgb(34, 197, 94)),
-                                            ("Công việc", Color32::from_rgb(249, 115, 22)),
-                                            ("Bạn bè", Color32::from_rgb(168, 85, 247)),
-                                            ("Trả lời sau", Color32::from_rgb(234, 179, 8)),
-                                            ("Đồng nghiệp", Color32::from_rgb(59, 130, 246)),
-                                        ];
-                                        for (cat_name, dot_col) in categories {
-                                            let is_cur = cur_label.as_deref() == Some(cat_name);
-                                            let txt = if is_cur {
-                                                format!("● {cat_name}  {}", lucide::CHECK)
-                                            } else {
-                                                format!("● {cat_name}")
-                                            };
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        RichText::new(txt)
-                                                            .size(13.2)
-                                                            .color(dot_col),
-                                                    )
-                                                    .frame(false)
-                                                    .min_size(Vec2::new(175.0, 26.0)),
-                                                )
-                                                .clicked()
-                                            {
-                                                let next_lbl = if is_cur {
-                                                    None
-                                                } else {
-                                                    Some(cat_name.to_string())
-                                                };
-                                                pending_ctx_action =
-                                                    Some(ThreadCtxAction::SetLabel(
-                                                        tid_cl.clone(),
-                                                        next_lbl,
-                                                    ));
-                                                ui.close_menu();
-                                            }
+                                        // Read-only: labels come from the Zalo account; editing
+                                        // them needs `convlabel/update` (not implemented, see re-notes/40).
+                                        if self.conv_labels.is_empty() {
+                                            ui.label(
+                                                RichText::new("Tài khoản chưa có phân loại")
+                                                    .size(12.5)
+                                                    .color(pal.text_muted),
+                                            );
                                         }
-                                        if cur_label.is_some() {
-                                            ui.separator();
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        RichText::new("Bỏ phân loại")
-                                                            .size(13.0)
-                                                            .color(pal.text_secondary),
-                                                    )
-                                                    .frame(false)
-                                                    .min_size(Vec2::new(175.0, 26.0)),
-                                                )
-                                                .clicked()
-                                            {
-                                                pending_ctx_action = Some(
-                                                    ThreadCtxAction::SetLabel(tid_cl.clone(), None),
+                                        for l in &self.conv_labels {
+                                            let on = thread_label_ids.contains(&l.id);
+                                            ui.horizontal(|ui| {
+                                                let (r, _) = ui.allocate_exact_size(
+                                                    Vec2::new(14.0, 20.0),
+                                                    Sense::hover(),
                                                 );
-                                                ui.close_menu();
-                                            }
+                                                ui.painter().rect_filled(
+                                                    Rect::from_center_size(
+                                                        r.center(),
+                                                        Vec2::new(12.0, 8.0),
+                                                    ),
+                                                    Rounding::same(2.0),
+                                                    label_color(&l.color, pal.primary),
+                                                );
+                                                ui.label(
+                                                    RichText::new(&l.text)
+                                                        .size(13.2)
+                                                        .color(pal.text_primary),
+                                                );
+                                                if on {
+                                                    ui.label(
+                                                        RichText::new(lucide::CHECK)
+                                                            .size(12.0)
+                                                            .color(pal.primary_hover),
+                                                    );
+                                                }
+                                            });
                                         }
+                                        ui.separator();
+                                        ui.label(
+                                            RichText::new(
+                                                "Gán phân loại trên Zalo điện thoại / Zalo PC",
+                                            )
+                                            .size(11.5)
+                                            .color(pal.text_muted),
+                                        );
                                     },
                                 );
 
@@ -1637,16 +1641,6 @@ impl ZaloGuiApp {
                                     pin,
                                 });
                             }
-                        }
-                        ThreadCtxAction::SetLabel(tid, lbl_opt) => {
-                            if let Some(lbl) = lbl_opt {
-                                self.settings.thread_labels.insert(tid, lbl.clone());
-                                self.show_toast(format!("🏷️ Đã phân loại: {lbl}"));
-                            } else {
-                                self.settings.thread_labels.remove(&tid);
-                                self.show_toast("Đã bỏ thẻ phân loại");
-                            }
-                            self.settings.save();
                         }
                         ThreadCtxAction::ToggleUnread(tid, is_group, unread) => {
                             if unread {
@@ -2299,7 +2293,7 @@ impl ZaloGuiApp {
                         ui.add(egui::Separator::default().spacing(1.0));
 
                         egui::Frame::none()
-                            .fill(pal.bg_app)
+                            .fill(pal.bg_hover)
                             .inner_margin(Margin::symmetric(16.0, 12.0))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -6355,6 +6349,143 @@ impl ZaloGuiApp {
                 .set_char_range(Some(egui::text::CCursorRange::one(end)));
             st.store(ctx, composer_id);
         }
+    }
+
+    /// "Phân loại ▾" next to the conversation tabs: filter by the account's Zalo labels.
+    fn render_sidebar_label_filter(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let n = self.sidebar_label_filter.len();
+            let text = if n > 0 {
+                format!("Phân loại ({n}) {}", lucide::CHEVRON_DOWN)
+            } else {
+                format!("Phân loại {}", lucide::CHEVRON_DOWN)
+            };
+            let btn = ui
+                .add(
+                    egui::Label::new(RichText::new(text).size(13.0).color(
+                        if n > 0 || self.sidebar_label_menu_open {
+                            pal.primary_hover
+                        } else {
+                            pal.text_secondary
+                        },
+                    ))
+                    .sense(Sense::click()),
+                )
+                .on_hover_cursor(CursorIcon::PointingHand);
+            if btn.clicked() {
+                self.sidebar_label_menu_open = !self.sidebar_label_menu_open;
+                if self.sidebar_label_menu_open && !self.conv_labels_loading {
+                    // Refresh on open so labels added on the phone show up.
+                    if let Some(tx) = WORKER_TX.get() {
+                        self.conv_labels_loading = true;
+                        let _ = tx.send(WorkerCmd::FetchConvLabels);
+                    }
+                }
+            }
+            if !self.sidebar_label_menu_open {
+                return;
+            }
+            let area = egui::Area::new(Id::new("sidebar_label_menu"))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::RIGHT_TOP)
+                .fixed_pos(btn.rect.right_bottom() + Vec2::new(0.0, 6.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::none()
+                        .fill(pal.bg_elevated)
+                        .stroke(Stroke::new(1.0_f32, pal.border))
+                        .rounding(Rounding::same(6.0))
+                        .inner_margin(Margin::same(6.0))
+                        .show(ui, |ui| {
+                            ui.set_width(220.0);
+                            if self.conv_labels.is_empty() {
+                                ui.label(
+                                    RichText::new(if self.conv_labels_loading {
+                                        "Đang tải phân loại…"
+                                    } else {
+                                        "Chưa có phân loại nào"
+                                    })
+                                    .size(13.0)
+                                    .color(pal.text_muted),
+                                );
+                            }
+                            let mut toggle: Option<i64> = None;
+                            for l in &self.conv_labels {
+                                let (r, resp) =
+                                    ui.allocate_exact_size(Vec2::new(220.0, 36.0), Sense::click());
+                                if resp.hovered() {
+                                    ui.painter()
+                                        .rect_filled(r, Rounding::same(4.0), pal.bg_hover);
+                                }
+                                let on = self.sidebar_label_filter.contains(&l.id);
+                                let box_r = Rect::from_center_size(
+                                    Pos2::new(r.left() + 16.0, r.center().y),
+                                    Vec2::splat(16.0),
+                                );
+                                if on {
+                                    ui.painter().rect_filled(
+                                        box_r,
+                                        Rounding::same(3.0),
+                                        pal.primary,
+                                    );
+                                    ui.painter().text(
+                                        box_r.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        lucide::CHECK,
+                                        FontId::proportional(12.0),
+                                        Color32::WHITE,
+                                    );
+                                } else {
+                                    ui.painter().rect_stroke(
+                                        box_r,
+                                        Rounding::same(3.0),
+                                        Stroke::new(1.5_f32, pal.text_muted),
+                                    );
+                                }
+                                ui.painter().rect_filled(
+                                    Rect::from_center_size(
+                                        Pos2::new(r.left() + 46.0, r.center().y),
+                                        Vec2::new(18.0, 12.0),
+                                    ),
+                                    Rounding::same(3.0),
+                                    label_color(&l.color, pal.primary),
+                                );
+                                ui.painter().text(
+                                    Pos2::new(r.left() + 66.0, r.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    &l.text,
+                                    FontId::proportional(14.0),
+                                    pal.text_primary,
+                                );
+                                if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                    toggle = Some(l.id);
+                                }
+                            }
+                            if let Some(id) = toggle {
+                                if let Some(pos) =
+                                    self.sidebar_label_filter.iter().position(|x| *x == id)
+                                {
+                                    self.sidebar_label_filter.remove(pos);
+                                } else {
+                                    self.sidebar_label_filter.push(id);
+                                }
+                            }
+                            if !self.sidebar_label_filter.is_empty() {
+                                ui.separator();
+                                if ui.button("Bỏ lọc").clicked() {
+                                    self.sidebar_label_filter.clear();
+                                }
+                            }
+                        });
+                });
+            let pressed_outside = ui.ctx().input(|i| i.pointer.any_pressed())
+                && ui
+                    .ctx()
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|p| !area.response.rect.contains(p) && !btn.rect.contains(p));
+            if pressed_outside {
+                self.sidebar_label_menu_open = false;
+            }
+        });
     }
 
     /// Open the "Chia sẻ" dialog for one or more messages (multi-select shares several).

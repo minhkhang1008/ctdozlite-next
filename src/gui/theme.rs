@@ -36,6 +36,13 @@ pub(super) struct ThemePalette {
     /// Tile behind the active rail item (`--layer-background-navbar-selected`).
     pub(super) nav_selected_bg: Color32,
     pub(super) nav_hover_bg: Color32,
+    /// Text/icons drawn on `bg_app` (custom title bar). Light mode's `bg_app` is Zalo blue, so
+    /// these must be light there; using `text_*` on it made the title bar unreadable.
+    pub(super) chrome_fg: Color32,
+    pub(super) chrome_fg_muted: Color32,
+    pub(super) chrome_hover: Color32,
+    pub(super) chrome_pill_bg: Color32,
+    pub(super) chrome_pill_fg: Color32,
 }
 
 impl ThemePalette {
@@ -71,6 +78,11 @@ impl ThemePalette {
             nav_icon_active: Color32::from_rgb(0xDF, 0xE2, 0xE7),
             nav_selected_bg: Color32::from_rgba_unmultiplied(255, 255, 255, 13), // white 5%
             nav_hover_bg: Color32::from_rgba_unmultiplied(255, 255, 255, 26),    // white 10%
+            chrome_fg: Color32::from_rgb(0xDF, 0xE2, 0xE7),
+            chrome_fg_muted: Color32::from_rgb(0x9F, 0xAC, 0xBC),
+            chrome_hover: Color32::from_rgb(0x26, 0x2A, 0x2F),
+            chrome_pill_bg: Color32::from_rgba_unmultiplied(0x00, 0x68, 0xFF, 36),
+            chrome_pill_fg: Color32::from_rgb(0x66, 0xA6, 0xFF),
         }
     }
 
@@ -105,6 +117,12 @@ impl ThemePalette {
             nav_icon_active: Color32::WHITE,
             nav_selected_bg: Color32::from_rgba_unmultiplied(0, 0, 0, 64), // black 25%
             nav_hover_bg: Color32::from_rgba_unmultiplied(0, 0, 0, 38),    // black 15%
+            // White on the blue #005AE0 title bar, like Zalo PC light.
+            chrome_fg: Color32::WHITE,
+            chrome_fg_muted: Color32::from_rgb(0xD6, 0xE6, 0xFF),
+            chrome_hover: Color32::from_rgba_unmultiplied(255, 255, 255, 38),
+            chrome_pill_bg: Color32::from_rgba_unmultiplied(255, 255, 255, 46),
+            chrome_pill_fg: Color32::WHITE,
         }
     }
 
@@ -270,6 +288,17 @@ pub(super) fn parse_hex_color(s: &str) -> Option<Color32> {
     } else {
         None
     }
+}
+
+/// Colour of a Zalo conversation label (`#RRGGBB` or ARGB `#AARRGGBB`), with a fallback.
+pub(super) fn label_color(raw: &str, fallback: Color32) -> Color32 {
+    let h = raw.trim().trim_start_matches('#');
+    let rgb = if h.len() == 8 && h.is_ascii() {
+        &h[2..]
+    } else {
+        h
+    };
+    parse_hex_color(rgb).unwrap_or(fallback)
 }
 
 pub(super) fn format_hex_color(c: Color32) -> String {

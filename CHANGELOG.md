@@ -13,15 +13,21 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 - **Thanh thao tác khi rê chuột vào tin nhắn:** Ba nút Trả lời, Chia sẻ và "…" (menu Copy / Ghim / Đánh dấu / Tuỳ chọn khác / Thu hồi / Xóa chỉ ở phía tôi) như Zalo PC.
 - **Hộp thoại Chia sẻ mới:** Tìm kiếm không dấu, tab Gần đây / Nhóm trò chuyện / Bạn bè, lọc theo **Phân loại** (nhãn hội thoại của tài khoản Zalo, `re-notes/40`), chọn nhiều hội thoại, xem trước nội dung và gửi kèm lời nhắn.
 - **Chọn nhiều tin nhắn:** Bấm để chọn từng tin; thanh "n Đã chọn" có Sao chép, Chia sẻ, Xóa (chỉ ở phía tôi) và Hủy (`Esc`).
+- **Phân loại ở danh sách hội thoại:** Thẻ màu theo nhãn tài khoản Zalo trên từng hội thoại và bộ lọc **Phân loại ▾** (thay cho nhãn cục bộ cố định trước đây). Chỉ đọc; gán nhãn trên điện thoại hoặc Zalo PC.
+- **Mã QR đăng nhập tự làm mới:** Đếm ngược theo `qr_timeout` của Zalo, tự lấy mã mới khi hết hạn hoặc khi quét/xác nhận lỗi (tối đa 3 lần liên tiếp), kèm hướng dẫn xử lý khi điện thoại báo "không có kết nối với máy chủ".
 - **Xem chi tiết tin nhắn:** Người gửi, thời gian đầy đủ, loại tin, trạng thái gửi, số cảm xúc và mã tin nhắn.
 
 ### Changed (Thay đổi)
 - Đổi tên hiển thị thành **ctdozlite-next** (tiêu đề cửa sổ, thanh tiêu đề, Cài đặt, thông báo, `--version`). Tên tệp chạy, bundle id và thư mục dữ liệu giữ nguyên.
 - Giao diện tối: nền tối hơn, bong bóng tin nhắn màu xám để tách khỏi nền.
 - Menu tin nhắn ghi "Copy link" với tin liên kết.
+- Mở app ở chế độ toàn màn hình (phóng to sau khung hình đầu; đặt ngay lúc tạo cửa sổ làm cửa sổ không viền biến mất trên macOS).
+- Bỏ tab đăng nhập bằng số điện thoại khỏi màn hình đăng nhập.
+- Xoá `.mailmap` (chỉ dùng để gộp danh tính người đóng góp bản gốc trong `git log`).
 - CI: push lên `main` chỉ chạy test (bỏ qua nếu chỉ sửa tài liệu); bộ cài cho mọi nền tảng chỉ được dựng khi có tag `v*` hoặc chạy thủ công.
 
 ### Fixed (Sửa lỗi)
+- **Giao diện sáng:** Chữ, huy hiệu phiên bản và nút cửa sổ trên thanh tiêu đề xanh nay màu trắng (trước đây cùng màu nền nên không đọc được); khung "Tổng số tin nhắn / Mã định danh" không còn nền xanh.
 - **Thanh soạn tin bị đẩy khuất khi đang trả lời:** Chiều cao khu vực dưới danh sách tin nhắn nay được đo thực tế thay vì ước lượng; phần xem trước tin được trả lời chỉ còn một dòng.
 
 ## [0.2.0] - 2026-11-12

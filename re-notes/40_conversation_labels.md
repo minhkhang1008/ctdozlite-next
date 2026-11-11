@@ -24,8 +24,12 @@ Status: **implemented from source; request shape not capture-verified** (read-on
 
 `chat::fetch_conv_labels` → `GET {endpoints::service("label")}/api/convlabel/get?{common}&params=AES({imei})`.
 `chat::parse_conv_labels` handles the string, array and object forms. `ConvLabel::contains`
-requires the `g` prefix for groups (app group ids are bare numbers). The labels are only used to
-filter the share dialog list; nothing is written back (`convlabel/update` is not used).
+requires the `g` prefix for groups (app group ids are bare numbers). The labels filter the share
+dialog list and the sidebar ("Phân loại ▾"), and draw a colour tag on each labelled conversation.
+They are fetched at startup, after login and whenever the sidebar dropdown opens. Nothing is
+written back: `convlabel/update` replaces the whole `labelData` blob, so a wrong shape could wipe the
+user's labels on every device. Editing stays on the phone / Zalo PC until that call is
+capture-verified.
 
 ## Manual check
 

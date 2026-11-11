@@ -676,3 +676,43 @@ Entry template:
   functions. rustfmt was run on messages/modals/workspace/chat only. NOT verified in the running
   GUI. `convlabel/get` is not live-tested (no valid local session); the parser follows the
   source and zca-js.
+
+## 2026-11-12 — Light-mode chrome, QR auto-refresh + help, no phone login, start maximized, sidebar labels, drop .mailmap  (agent: Claude Code, claude-opus-5-5)
+
+- Requests: (1) remove phone login; (2) QR: phone sometimes says "không có kết nối với máy chủ";
+  guide the user, and auto-refresh/expire like Zalo PC; (3) header still says "ctdozlite"; (4) is
+  .mailmap needed?; (5) light mode: title bar text/icons, version pill and info panel unreadable;
+  (6) open full screen; (7) implement "Phân loại" fully.
+- Findings:
+  - (3) The owner's screenshots show "Native v0.1.0", an old binary. Current code renders
+    `APP_DISPLAY_NAME` and the version from Cargo.toml (0.2.0). Verified by launching a fresh build
+    with a temp data dir: the title shows "ctdozlite-next v0.2.0". A second Zalo icon in the Dock
+    was the owner's running old copy.
+  - (5) Light `bg_app` is Zalo blue, but the title bar used `text_*` colours; the drawer footer
+    used `bg_app` as a panel fill.
+  - (2) `wait_for_scan` / `confirm` errors were silently dropped, so an expired QR stayed on
+    screen forever.
+  - (6) `ViewportBuilder::with_maximized(true)` with `decorations(false)` made the window never
+    appear on macOS (reproduced: process running, no window). Fixed by sending
+    `ViewportCommand::Maximized(true)` on the first frame (verified: window opens maximized).
+- Changes:
+  - theme.rs: chrome tokens (`chrome_fg`, `chrome_fg_muted`, `chrome_hover`, `chrome_pill_bg`,
+    `chrome_pill_fg`) are white-on-blue in light and match the old look in dark. The title bar
+    uses them; the pill now reads `v0.2.0`. The drawer footer uses `bg_hover`.
+    `label_color()` helper (RGB/ARGB).
+  - gui.rs: the login screen is QR only (LoginTab/phone/password state removed; the worker
+    `LoginPassword` and the CLI `--phone/--pass` remain). QR countdown from
+    `qr_login.qr_timeout` (minus 5 s), auto `request_new_qr` on expiry, `GuiEvent::QrExpired`
+    (from worker scan/confirm errors) triggers auto refresh, capped at 3 failures within 20 s
+    each. Collapsible help: quit/reopen Zalo, refresh QR, check network/VPN, confirm in time.
+  - Sidebar labels: server labels replace the hard-coded local categories. Colour tag on rows,
+    "Phân loại ▾" filter next to the tabs (refetches on open), and a read-only label list in the
+    right-click menu. `SetLabel` action removed; `settings.thread_labels` is left unused for
+    settings compatibility. Labels are fetched at startup (if logged in) and on LoginSuccess.
+  - Removed `.mailmap` (only merges upstream contributor identities in git log/shortlog).
+  - Docs: TINH_NANG, HUONG_DAN (QR help), CHANGELOG, re-notes/40 (why there is no write path).
+- Verification: `cargo test --locked` all pass; no clippy warnings in the new code. Launched a
+  debug build in light mode with a temp data dir: the title bar is readable, there is no phone
+  tab, the countdown and help link render, and the window starts maximized. NOT verified: a
+  logged-in session (sidebar labels, the drawer in light mode) and real QR expiry auto-refresh
+  end to end.

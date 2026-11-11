@@ -31,6 +31,9 @@ Trên macOS, bản `.app` mặc định lưu dữ liệu trong `~/Library/Applic
 1. Chạy `./target/release/ctdozlite --gui`.
 2. Mở ứng dụng Zalo trên điện thoại, quét mã QR hiển thị trên màn hình và bấm **Đăng nhập**.
 3. Sau khi xác nhận, phiên làm việc được lưu vào `session.json`. Ở những lần mở tiếp theo, ứng dụng tự nạp lại phiên này mà không cần quét lại mã QR.
+4. Mã QR có hạn khoảng 3 phút; app hiện đếm ngược và tự lấy mã mới khi hết hạn. Nếu điện thoại báo
+   **"không có kết nối với máy chủ"** khi quét: thoát hẳn Zalo trên điện thoại rồi mở lại, bấm
+   **Tạo / Làm mới mã QR**, kiểm tra mạng (tắt VPN) rồi quét lại. Hướng dẫn này cũng có ngay dưới mã QR.
 
 ### 2.2. Nhắn tin & Gợi ý Sticker tự động
 - **Tìm kiếm và lọc hội thoại:** Sử dụng ô tìm kiếm phía trên danh sách bên trái (hỗ trợ tìm tiếng Việt không dấu) hoặc lọc theo các tab *Tất cả*, *Cá nhân*, *Nhóm*.

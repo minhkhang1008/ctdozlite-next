@@ -1229,6 +1229,13 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                 let scan_res =
                                                     crate::qr::wait_for_scan(&s_snap, &q).await;
 
+                                                if let Err(ref e) = scan_res {
+                                                    // Expired / rejected QR: let the GUI fetch a new one.
+                                                    let _ = gui_tx_clone.send(GuiEvent::QrExpired {
+                                                        reason: e.to_string(),
+                                                    });
+                                                    ctx_clone.request_repaint();
+                                                }
                                                 if let Ok(scanned) = scan_res {
                                                     let name = scanned
                                                         .get("display_name")
@@ -1243,6 +1250,12 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                     let confirm_res =
                                                         crate::qr::confirm(&s_snap, &q).await;
 
+                                                    if let Err(ref e) = confirm_res {
+                                                        let _ = gui_tx_clone.send(GuiEvent::QrExpired {
+                                                            reason: format!("chưa xác nhận đăng nhập: {e}"),
+                                                        });
+                                                        ctx_clone.request_repaint();
+                                                    }
                                                     if let Ok(resp) = confirm_res {
                                                         let mut s = session_clone.lock().await;
                                                         if let Some(sek) =

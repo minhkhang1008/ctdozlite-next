@@ -6292,7 +6292,7 @@ impl ZaloGuiApp {
                                                                 ui.painter().rect_stroke(box_r, Rounding::same(3.0), Stroke::new(1.5_f32, pal.text_muted));
                                                             }
                                                             let tag = Rect::from_center_size(Pos2::new(r.left() + 46.0, r.center().y), Vec2::new(18.0, 12.0));
-                                                            ui.painter().rect_filled(tag, Rounding::same(3.0), parse_hex_color({ let h = l.color.trim().trim_start_matches('#'); if h.len() == 8 && h.is_ascii() { &h[2..] } else { h } }).unwrap_or(pal.primary));
+                                                            ui.painter().rect_filled(tag, Rounding::same(3.0), label_color(&l.color, pal.primary));
                                                             ui.painter().text(
                                                                 Pos2::new(r.left() + 66.0, r.center().y),
                                                                 egui::Align2::LEFT_CENTER,

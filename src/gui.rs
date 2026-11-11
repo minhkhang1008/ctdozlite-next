@@ -57,6 +57,10 @@ pub enum GuiEvent {
         qr_login: QrLogin,
         qr_image: egui::ColorImage,
     },
+    /// The QR expired or the scan/confirm failed; the login screen asks for a fresh one.
+    QrExpired {
+        reason: String,
+    },
     QrScanned {
         name: String,
     },
@@ -555,15 +559,22 @@ pub struct ZaloGuiApp {
     user_avatar: Option<String>,
 
     // Login screen state
-    login_tab: LoginTab,
-    phone_input: String,
-    password_input: String,
     login_in_progress: bool,
     login_status_msg: String,
 
     // QR state
     qr_texture: Option<TextureHandle>,
     qr_status: String,
+    /// One-shot: maximize the window on the first frame.
+    startup_maximized: bool,
+    /// When the shown QR stops being valid (from `qr_timeout`); drives the countdown + refresh.
+    qr_expires_at: Option<std::time::Instant>,
+    /// The QR was scanned and we wait for "Đăng nhập" on the phone (countdown paused).
+    qr_scanned: bool,
+    qr_quick_failures: u32,
+    qr_last_auto_refresh: Option<std::time::Instant>,
+    /// "Điện thoại báo không kết nối được máy chủ?" help expanded.
+    qr_help_open: bool,
 
     // Chat screen state
     threads: Vec<Thread>,
@@ -596,6 +607,9 @@ pub struct ZaloGuiApp {
     /// Conversation labels from the account (fetched on demand).
     conv_labels: Vec<crate::chat::ConvLabel>,
     conv_labels_loading: bool,
+    /// Sidebar "Phân loại" filter (label ids) and its dropdown.
+    sidebar_label_filter: Vec<i64>,
+    sidebar_label_menu_open: bool,
     /// (thread id, message id) whose reaction list is open.
     reactions_dialog: Option<(String, String)>,
     /// Selected reaction type tab in that dialog (None = all).
@@ -740,12 +754,6 @@ pub struct ZaloGuiApp {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum LoginTab {
-    QrCode,
-    Password,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 enum DevTab {
     Logs,
     Scanner,
@@ -848,13 +856,16 @@ impl ZaloGuiApp {
             user_name,
             user_uin,
             user_avatar,
-            login_tab: LoginTab::QrCode,
-            phone_input: String::new(),
-            password_input: String::new(),
             login_in_progress: false,
             login_status_msg: String::new(),
             qr_texture: None,
             qr_status: "Đang tạo mã QR đăng nhập…".into(),
+            startup_maximized: false,
+            qr_expires_at: None,
+            qr_scanned: false,
+            qr_quick_failures: 0,
+            qr_last_auto_refresh: None,
+            qr_help_open: false,
             threads,
             reaction_inbox: crate::reactions::ReactionInbox::default(),
 
@@ -876,6 +887,8 @@ impl ZaloGuiApp {
             forward_label_menu_open: false,
             conv_labels: Vec::new(),
             conv_labels_loading: false,
+            sidebar_label_filter: Vec::new(),
+            sidebar_label_menu_open: false,
             reactions_dialog: None,
             reactions_tab: None,
             filter_starred_only: false,
@@ -1032,6 +1045,10 @@ impl ZaloGuiApp {
                 let _ = wtx.send(WorkerCmd::RequestQr);
             }
             let _ = wtx.send(WorkerCmd::CheckForUpdates { silent: true });
+            if app.is_logged_in {
+                app.conv_labels_loading = true;
+                let _ = wtx.send(WorkerCmd::FetchConvLabels);
+            }
         }
         app
     }
@@ -1095,17 +1112,45 @@ impl ZaloGuiApp {
                 GuiEvent::NotificationAuthorization { request_id, result } => {
                     self.notification_authorization.finish(request_id, result);
                 }
-                GuiEvent::QrReady { qr_image, .. } => {
+                GuiEvent::QrReady { qr_image, qr_login } => {
                     self.qr_texture =
                         Some(ctx.load_texture("qr_code_tex", qr_image, TextureOptions::NEAREST));
                     self.qr_status = "Mở ứng dụng Zalo trên điện thoại và quét mã QR".into();
                     self.login_in_progress = false;
+                    // Zalo states the lifetime (`qr_timeout`, usually 180 s); refresh a little
+                    // before the server drops it, like Zalo PC does.
+                    let life = qr_login.qr_timeout.clamp(30, 600).saturating_sub(5);
+                    self.qr_expires_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(life));
+                    self.qr_scanned = false;
+                }
+                GuiEvent::QrExpired { reason } => {
+                    self.qr_expires_at = None;
+                    if !self.is_logged_in {
+                        // Back-to-back failures (e.g. no network) stop auto-refreshing after 3 tries.
+                        let quick = self
+                            .qr_last_auto_refresh
+                            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(20));
+                        self.qr_quick_failures = if quick { self.qr_quick_failures + 1 } else { 0 };
+                        if self.qr_quick_failures < 3 {
+                            self.request_new_qr("Mã QR đã hết hạn — đang lấy mã mới…");
+                        } else {
+                            self.qr_status = format!(
+                                "Không lấy được mã QR mới ({reason}). Kiểm tra mạng rồi bấm Làm mới mã QR."
+                            );
+                        }
+                    }
                 }
                 GuiEvent::QrScanned { name } => {
+                    self.qr_scanned = true;
                     self.qr_status =
                         format!("Đã quét bởi {name} — Vui lòng bấm 'Đăng nhập' trên điện thoại…");
                 }
                 GuiEvent::LoginSuccess { name, uin, avatar } => {
+                    if let Some(tx) = WORKER_TX.get() {
+                        self.conv_labels_loading = true;
+                        let _ = tx.send(WorkerCmd::FetchConvLabels);
+                    }
                     // On session refresh under the same account, keep thread list & unread counts.
                     // Clearing + re-fetching counts all existing history as brand-new unread (#119).
                     let is_refresh = self.is_logged_in;
@@ -2336,6 +2381,12 @@ impl ZaloGuiApp {
 
 impl eframe::App for ZaloGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Open filling the screen (owner preference). Done after the first frame: on macOS a
+        // borderless window created with `with_maximized(true)` never became visible.
+        if !self.startup_maximized {
+            self.startup_maximized = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q))
             || ctx.input(|i| i.viewport().close_requested())
         {
@@ -2662,20 +2713,20 @@ impl ZaloGuiApp {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(crate::APP_DISPLAY_NAME)
-                            .color(pal.text_primary)
+                            .color(pal.chrome_fg)
                             .size(13.5)
                             .strong(),
                     );
 
                     // Subtle "Native v<version>" pill badge
                     egui::Frame::none()
-                        .fill(pal.primary.linear_multiply(0.14))
+                        .fill(pal.chrome_pill_bg)
                         .rounding(Rounding::same(4.0))
                         .inner_margin(Margin::symmetric(5.0, 1.5))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(format!("Native v{}", env!("CARGO_PKG_VERSION")))
-                                    .color(pal.primary)
+                                RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                    .color(pal.chrome_pill_fg)
                                     .size(10.5)
                                     .strong(),
                             );
@@ -2699,7 +2750,7 @@ impl ZaloGuiApp {
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new(format!("·  {}", self.user_name))
-                                .color(pal.text_muted)
+                                .color(pal.chrome_fg_muted)
                                 .size(12.0),
                         );
                     }
@@ -2721,7 +2772,7 @@ impl ZaloGuiApp {
                         let close_fg = if close_resp.hovered() {
                             Color32::WHITE
                         } else {
-                            pal.text_secondary
+                            pal.chrome_fg_muted
                         };
                         let cc = close_rect.center();
                         let d = 4.6_f32;
@@ -2748,12 +2799,12 @@ impl ZaloGuiApp {
                             ui.allocate_exact_size(Vec2::new(46.0, 32.0), Sense::click());
                         if max_resp.hovered() {
                             ui.painter()
-                                .rect_filled(max_rect, Rounding::ZERO, pal.bg_hover);
+                                .rect_filled(max_rect, Rounding::ZERO, pal.chrome_hover);
                         }
                         let max_fg = if max_resp.hovered() {
-                            pal.text_primary
+                            pal.chrome_fg
                         } else {
-                            pal.text_secondary
+                            pal.chrome_fg_muted
                         };
                         let mc = max_rect.center();
                         if is_maximized {
@@ -2771,7 +2822,7 @@ impl ZaloGuiApp {
                                 front,
                                 Rounding::same(1.0),
                                 if max_resp.hovered() {
-                                    pal.bg_hover
+                                    pal.chrome_hover
                                 } else {
                                     pal.bg_app
                                 },
@@ -2799,12 +2850,12 @@ impl ZaloGuiApp {
                             ui.allocate_exact_size(Vec2::new(46.0, 32.0), Sense::click());
                         if min_resp.hovered() {
                             ui.painter()
-                                .rect_filled(min_rect, Rounding::ZERO, pal.bg_hover);
+                                .rect_filled(min_rect, Rounding::ZERO, pal.chrome_hover);
                         }
                         let min_fg = if min_resp.hovered() {
-                            pal.text_primary
+                            pal.chrome_fg
                         } else {
-                            pal.text_secondary
+                            pal.chrome_fg_muted
                         };
                         let mnc = min_rect.center();
                         ui.painter().line_segment(
@@ -2820,7 +2871,7 @@ impl ZaloGuiApp {
                             ui.allocate_exact_size(Vec2::new(36.0, 32.0), Sense::click());
                         if th_resp.hovered() {
                             ui.painter()
-                                .rect_filled(th_rect, Rounding::ZERO, pal.bg_hover);
+                                .rect_filled(th_rect, Rounding::ZERO, pal.chrome_hover);
                         }
                         let th_icon = if self.dark_mode {
                             lucide::SUN
@@ -2833,9 +2884,9 @@ impl ZaloGuiApp {
                             th_icon,
                             FontId::proportional(13.5),
                             if th_resp.hovered() {
-                                pal.text_primary
+                                pal.chrome_fg
                             } else {
-                                pal.text_muted
+                                pal.chrome_fg_muted
                             },
                         );
                         if th_resp
@@ -2891,11 +2942,11 @@ impl ZaloGuiApp {
                             let hist_btn = egui::Button::new(
                                 RichText::new("Xem lịch sử đã lưu")
                                     .size(11.5)
-                                    .color(pal.primary)
+                                    .color(pal.chrome_pill_fg)
                                     .strong(),
                             )
-                            .fill(pal.primary.linear_multiply(0.12))
-                            .stroke(Stroke::new(1.0_f32, pal.primary))
+                            .fill(pal.chrome_pill_bg)
+                            .stroke(Stroke::new(1.0_f32, pal.chrome_pill_fg.gamma_multiply(0.6)))
                             .rounding(Rounding::same(5.0));
                             let r = ui
                                 .add(hist_btn)
@@ -2956,53 +3007,7 @@ impl ZaloGuiApp {
                 .show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.vertical_centered(|ui| {
-                        // Segmented Tab Switcher
-                        egui::Frame::none()
-                            .fill(pal.bg_input)
-                            .rounding(Rounding::same(10.0))
-                            .inner_margin(Margin::same(4.0))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let tab_w = (ui.available_width() - 8.0) / 2.0;
-                                    for (tab, title) in [
-                                        (LoginTab::QrCode, "Quét mã QR"),
-                                        (LoginTab::Password, "Số điện thoại"),
-                                    ] {
-                                        let active = self.login_tab == tab;
-                                        let btn = egui::Button::new(
-                                            RichText::new(title)
-                                                .size(13.0)
-                                                .color(if active {
-                                                    Color32::WHITE
-                                                } else {
-                                                    pal.text_secondary
-                                                })
-                                                .strong(),
-                                        )
-                                        .fill(if active {
-                                            pal.primary
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        })
-                                        .stroke(Stroke::NONE)
-                                        .rounding(Rounding::same(7.0))
-                                        .min_size(Vec2::new(tab_w, 32.0));
-
-                                        if ui
-                                            .add(btn)
-                                            .on_hover_cursor(CursorIcon::PointingHand)
-                                            .clicked()
-                                        {
-                                            self.login_tab = tab;
-                                        }
-                                    }
-                                });
-                            });
-
-                        ui.add_space(18.0);
-
-                        match self.login_tab {
-                            LoginTab::QrCode => {
+                        {
                                 if let Some(tex) = &self.qr_texture {
                                     egui::Frame::none()
                                         .fill(Color32::WHITE)
@@ -3059,80 +3064,71 @@ impl ZaloGuiApp {
                                     .on_hover_cursor(CursorIcon::PointingHand)
                                     .clicked()
                                 {
-                                    self.login_in_progress = true;
-                                    self.qr_status = "Đang xin mã QR…".into();
-                                    if let Some(tx) = WORKER_TX.get() {
-                                        let _ = tx.send(WorkerCmd::RequestQr);
+                                    self.qr_quick_failures = 0;
+                                    self.request_new_qr("Đang xin mã QR…");
+                                }
+
+                                // Countdown + auto refresh (the official client rotates the QR too).
+                                if let Some(exp) = self.qr_expires_at {
+                                    let left = exp.saturating_duration_since(std::time::Instant::now());
+                                    if left.is_zero() {
+                                        self.request_new_qr("Mã QR đã hết hạn — đang lấy mã mới…");
+                                    } else if !self.qr_scanned {
+                                        ui.add_space(6.0);
+                                        let secs = left.as_secs();
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Mã QR tự làm mới sau {}:{:02}",
+                                                secs / 60,
+                                                secs % 60
+                                            ))
+                                            .size(12.0)
+                                            .color(pal.text_muted),
+                                        );
+                                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
                                     }
                                 }
-                            }
-                            LoginTab::Password => {
-                                ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                                    ui.label(
-                                        RichText::new("Số điện thoại")
-                                            .size(13.0)
-                                            .color(pal.text_secondary)
-                                            .strong(),
-                                    );
-                                    ui.add_space(4.0);
-                                    ui.add_sized(
-                                        [ui.available_width(), 34.0],
-                                        egui::TextEdit::singleline(&mut self.phone_input)
-                                            .hint_text("Ví dụ: 0912345678"),
-                                    );
-                                    ui.add_space(12.0);
 
-                                    ui.label(
-                                        RichText::new("Mật khẩu")
-                                            .size(13.0)
-                                            .color(pal.text_secondary)
-                                            .strong(),
-                                    );
-                                    ui.add_space(4.0);
-                                    ui.add_sized(
-                                        [ui.available_width(), 34.0],
-                                        egui::TextEdit::singleline(&mut self.password_input)
-                                            .password(true)
-                                            .hint_text("Nhập mật khẩu Zalo"),
-                                    );
-                                    ui.add_space(16.0);
-
-                                    if !self.login_status_msg.is_empty() {
-                                        ui.label(
-                                            RichText::new(&self.login_status_msg)
-                                                .color(pal.danger)
-                                                .size(12.5),
-                                        );
-                                        ui.add_space(8.0);
-                                    }
-
-                                    let btn = egui::Button::new(
-                                        RichText::new("Đăng nhập")
-                                            .color(Color32::WHITE)
-                                            .size(14.0)
-                                            .strong(),
+                                ui.add_space(14.0);
+                                let help_title = format!(
+                                    "{} Điện thoại báo “không có kết nối với máy chủ”?",
+                                    if self.qr_help_open { lucide::CHEVRON_DOWN } else { lucide::CHEVRON_RIGHT }
+                                );
+                                if ui
+                                    .add(
+                                        egui::Label::new(RichText::new(help_title).size(12.5).color(pal.primary_hover))
+                                            .sense(Sense::click()),
                                     )
-                                    .fill(pal.primary)
-                                    .rounding(Rounding::same(8.0))
-                                    .min_size(Vec2::new(ui.available_width(), 38.0));
-
-                                    if ui
-                                        .add_enabled(!self.login_in_progress, btn)
-                                        .on_hover_cursor(CursorIcon::PointingHand)
-                                        .clicked()
-                                    {
-                                        self.login_in_progress = true;
-                                        self.login_status_msg = "Đang kết nối…".into();
-                                        if let Some(tx) = WORKER_TX.get() {
-                                            let _ = tx.send(WorkerCmd::LoginPassword {
-                                                phone: self.phone_input.clone(),
-                                                pass: self.password_input.clone(),
+                                    .on_hover_cursor(CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    self.qr_help_open = !self.qr_help_open;
+                                }
+                                if self.qr_help_open {
+                                    ui.add_space(6.0);
+                                    egui::Frame::none()
+                                        .fill(pal.bg_input)
+                                        .rounding(Rounding::same(8.0))
+                                        .inner_margin(Margin::same(12.0))
+                                        .show(ui, |ui| {
+                                            ui.set_width(ui.available_width());
+                                            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                                                ui.spacing_mut().item_spacing.y = 6.0;
+                                                for step in [
+                                                    "1. Thoát hẳn Zalo trên điện thoại (vuốt tắt khỏi danh sách ứng dụng đang chạy), mở lại rồi quét lại.",
+                                                    "2. Bấm “Tạo / Làm mới mã QR” ở trên để lấy mã mới — mã cũ có thể đã hết hạn hoặc bị máy chủ huỷ.",
+                                                    "3. Kiểm tra mạng của điện thoại (Wi-Fi / 4G), tắt VPN hoặc trình chặn quảng cáo nếu có.",
+                                                    "4. Sau khi quét, bấm “Đăng nhập” trên điện thoại trong vòng vài phút.",
+                                                ] {
+                                                    ui.add(
+                                                        egui::Label::new(RichText::new(step).size(12.5).color(pal.text_secondary))
+                                                            .wrap(),
+                                                    );
+                                                }
                                             });
-                                        }
-                                    }
-                                });
-                            }
-                        }
+                                        });
+                                }
+                                                    }
                     });
                 });
         });
@@ -3169,6 +3165,20 @@ impl ZaloGuiApp {
         let text = msg.into();
         self.status_msg = text.clone();
         self.toast_notice = Some((text, std::time::Instant::now()));
+    }
+}
+
+impl ZaloGuiApp {
+    /// Ask the worker for a fresh login QR (manual button, expiry or a failed scan).
+    fn request_new_qr(&mut self, status: &str) {
+        self.login_in_progress = true;
+        self.qr_status = status.to_string();
+        self.qr_expires_at = None;
+        self.qr_scanned = false;
+        self.qr_last_auto_refresh = Some(std::time::Instant::now());
+        if let Some(tx) = WORKER_TX.get() {
+            let _ = tx.send(WorkerCmd::RequestQr);
+        }
     }
 }
 
