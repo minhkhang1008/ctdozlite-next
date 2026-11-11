@@ -2877,6 +2877,7 @@ impl CallBridge {
                                     reason: last_err_reason.clone(),
                                 });
                                 let _ = gui_tx_clone.send(GuiEvent::MessageSent {
+                                    mentions: Vec::new(),
                                     client_message_id: String::new(),
                                     thread_id: partner_id,
                                     text: if is_video {
@@ -3076,6 +3077,7 @@ impl CallBridge {
                                     let _ = gui_tx_clone
                                         .send(GuiEvent::CallStateChanged("free".into()));
                                     let _ = gui_tx_clone.send(GuiEvent::MessageSent {
+                                        mentions: Vec::new(),
                                         client_message_id: String::new(),
                                         thread_id: partner_id,
                                         text: if was_video {
@@ -3406,6 +3408,7 @@ impl CallBridge {
                                     (false, false) => format!("📞 Cuộc gọi đến ({duration_sec}s)"),
                                 };
                                 let _ = gui_tx.send(GuiEvent::MessageSent {
+                                    mentions: Vec::new(),
                                     client_message_id: String::new(),
                                     thread_id: thread_id.clone(),
                                     text: label,
@@ -4042,6 +4045,7 @@ impl CallBridge {
                                     });
                                     if let Some(st) = taken {
                                         let _ = gui_tx.send(GuiEvent::MessageSent {
+                                            mentions: Vec::new(),
                                             client_message_id: String::new(),
                                             thread_id: st.thread_id.clone(),
                                             text: if st.is_video {
@@ -4196,6 +4200,7 @@ impl CallBridge {
                                         (false, false, false) => "📞 Cuộc gọi nhỡ".to_string(),
                                     };
                                     let _ = gui_tx.send(GuiEvent::MessageSent {
+                                        mentions: Vec::new(),
                                         client_message_id: String::new(),
                                         thread_id: st.thread_id.clone(),
                                         text: label,

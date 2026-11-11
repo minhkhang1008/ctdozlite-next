@@ -32,11 +32,13 @@ pub fn is_trusted_zalo_url(url: &str) -> bool {
         return false;
     };
     let host = host.to_ascii_lowercase();
-    TRUSTED_BASE_DOMAINS
-        .iter()
-        .any(|base| host == *base || host.strip_suffix(base).is_some_and(|prefix| prefix.ends_with('.')))
+    TRUSTED_BASE_DOMAINS.iter().any(|base| {
+        host == *base
+            || host
+                .strip_suffix(base)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
 }
-
 
 // ---------------------------------------------------------------------------
 // Client-Side Privacy Blocker (block outbound typing / delivered / seen)
@@ -1480,7 +1482,10 @@ mod tests {
     fn cookie_restore_rejects_untrusted_saved_domain() {
         let mut session = Session::new(false, false, false).unwrap();
         session.domains.lp_chat = "https://zalo.me.attacker.test".into();
-        let err = session.validate_session_cookie_hosts().unwrap_err().to_string();
+        let err = session
+            .validate_session_cookie_hosts()
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("untrusted Zalo URL"), "{err}");
     }
 

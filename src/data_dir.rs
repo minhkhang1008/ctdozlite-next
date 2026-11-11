@@ -342,15 +342,28 @@ mod tests {
         ensure_private_dir(&private_dir).unwrap();
         let file = private_dir.join("secret.bin");
         write_private_file(&file, b"secret").unwrap();
-        assert_eq!(std::fs::metadata(&private_dir).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&private_dir)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
 
         let temp_path;
         {
             let temp = PrivateTempDir::new("ctdozlite-private-test").unwrap();
             temp_path = temp.path().to_path_buf();
             write_private_file(&temp_path.join("decrypted.db"), b"sqlite").unwrap();
-            assert_eq!(std::fs::metadata(&temp_path).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(
+                std::fs::metadata(&temp_path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
         }
         assert!(!temp_path.exists());
         std::fs::remove_dir_all(root).unwrap();

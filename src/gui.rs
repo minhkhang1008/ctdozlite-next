@@ -21,6 +21,10 @@ use crate::logger::{self, FindingLevel, LogEntry, ScanFinding};
 use crate::qr::QrLogin;
 use crate::session::Session;
 
+#[cfg(target_os = "macos")]
+mod macos_clipboard;
+#[cfg(target_os = "macos")]
+mod macos_drag;
 mod messages;
 mod modals;
 mod reactions_dialog;
@@ -68,6 +72,8 @@ pub enum GuiEvent {
         thread_id: String,
         text: String,
         msg_id: String,
+        /// `mentionInfo` entries sent with the text, so our own bubble highlights the tags.
+        mentions: Vec<serde_json::Value>,
     },
     StickerSent {
         client_message_id: String,
@@ -99,6 +105,12 @@ pub enum GuiEvent {
         items: Vec<crate::chat::StickerItem>,
     },
     StickerSuggestKeywordsLoaded(Vec<String>),
+    /// Results for `WorkerCmd::SearchGifs` with the same `seq`.
+    GifResults {
+        seq: u64,
+        items: Vec<crate::chat::GifItem>,
+        error: Option<String>,
+    },
     ComposerStickerSuggestions {
         keyword: String,
         items: Vec<crate::chat::StickerItem>,
@@ -121,6 +133,8 @@ pub enum GuiEvent {
         text: String,
         msg_id: String,
         quoted: ChatMessage,
+        /// `mentionInfo` entries sent with the reply, kept so our own bubble shows the tags.
+        mentions: Vec<serde_json::Value>,
     },
     Reacted {
         thread_id: String,
@@ -199,17 +213,6 @@ pub enum GuiEvent {
         total: u64,
     },
     UpdateAppliedAndRestarting(String),
-    SocialProfileLoaded(Result<crate::feed::SocialUserProfile, String>),
-    SocialAvatarsLoaded(Result<Vec<crate::feed::FeedMedia>, String>),
-    SocialTimelineLoaded(
-        Result<
-            (
-                Vec<crate::feed::SocialUserProfile>,
-                Vec<crate::feed::FeedItem>,
-            ),
-            String,
-        >,
-    ),
     MuteSnapshotSynced(HashMap<String, i64>),
     PinnedSnapshotSynced(Vec<String>),
     MuteEventsReceived(Vec<crate::chat::MuteControlEvent>),
@@ -335,12 +338,6 @@ struct ImageViewerModal {
     time: String,
     zoom: f32,
     pan: Vec2,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FeedModalTab {
-    Profile,
-    Avatars,
-    Packet50001,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContactsSubTab {
@@ -545,18 +542,6 @@ impl GuiTx {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct IncomingPopupState {
-    pub(crate) thread_id: String,
-    pub(crate) sender_name: String,
-    pub(crate) preview_text: String,
-    pub(crate) avatar_url: Option<String>,
-    pub(crate) is_group: bool,
-    pub(crate) unread_total: usize,
-    pub(crate) created_at: std::time::Instant,
-    pub(crate) reply_draft: String,
-}
-
 pub struct ZaloGuiApp {
     // Theme state
     dark_mode: bool,
@@ -609,8 +594,6 @@ pub struct ZaloGuiApp {
     /// "Xoá dữ liệu tin nhắn cục bộ" is pending confirmation (#21).
     wipe_confirm_open: bool,
     toast_notice: Option<(String, std::time::Instant)>,
-    /// Rich corner notification popup for incoming messages
-    incoming_popup: Option<IncomingPopupState>,
     phone_modal_open: bool,
     phone_modal_input: String,
     phone_lookup_loading: bool,
@@ -646,8 +629,37 @@ pub struct ZaloGuiApp {
     composer_sticker_selected: Option<usize>,
     composer_mention_selected: usize,
     dismissed_mention_suggest_for: String,
+    /// Members picked from the @ popover for the current draft; sent as Zalo tags.
+    composer_mentions: Vec<crate::chat::MentionPick>,
+    /// `@Sender` tag auto-inserted when entering reply mode; removed again on cancel.
+    reply_auto_mention: Option<crate::chat::MentionPick>,
+    /// Query the @ popover selection belongs to; a different query resets it to 0.
+    mention_last_query: String,
+    /// Last time the @ popover re-requested an empty group member list (retry throttle).
+    mention_member_retry_at: HashMap<String, std::time::Instant>,
     composer_focus_pending: bool,
     pending_clipboard_image: Option<(std::path::PathBuf, u32, u32, TextureHandle)>,
+    /// Files dropped on the composer zone, shown as a preview strip until sent or removed.
+    pending_drop_files: Vec<workspace::PendingDropFile>,
+    /// Composer `@gif` command state (re-notes/39).
+    gif_results: Vec<crate::chat::GifItem>,
+    gif_seq: u64,
+    gif_loading: bool,
+    gif_error: Option<String>,
+    gif_selected: usize,
+    /// Query last sent to the worker, and when the typed query last changed (debounce).
+    gif_query_sent: Option<String>,
+    gif_query_seen: String,
+    gif_query_changed_at: std::time::Instant,
+    /// Composer text for which the user closed the GIF popover with Esc.
+    gif_dismissed_for: Option<String>,
+    /// Scroll the keyboard-selected GIF into view on the next frame.
+    gif_scroll_pending: bool,
+    /// Off-thread size + thumbnail results for `pending_drop_files`.
+    drop_thumb_tx: std::sync::mpsc::Sender<workspace::DropThumb>,
+    drop_thumb_rx: std::sync::mpsc::Receiver<workspace::DropThumb>,
+    /// Zone under the cursor on the last drag-hover frame (fallback when no position is known).
+    drop_zone_last: Option<workspace::DropZone>,
     unread_counts: HashMap<String, usize>,
     link_metadata_cache: HashMap<String, crate::chat::LinkMetadata>,
     loading_link_previews: HashSet<String>,
@@ -662,6 +674,9 @@ pub struct ZaloGuiApp {
     settings_modal_open: bool,
     settings_tab: SettingsTab,
     notification_authorization: crate::native_notifications::AuthorizationState,
+    /// The one-shot macOS permission request at startup has been dispatched.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    startup_notification_request_sent: bool,
     settings: AppSettings,
     settings_blur_tex: Option<TextureHandle>,
     settings_blur_req_at: Option<std::time::Instant>,
@@ -678,24 +693,7 @@ pub struct ZaloGuiApp {
     dev_tab: DevTab,
     selected_log: Option<LogEntry>,
     scanner_findings: Vec<ScanFinding>,
-    feed_modal_open: bool,
-    feed_modal_tab: FeedModalTab,
-    feed_target_uid: String,
-    feed_loading_profile: bool,
-    feed_profile: Option<crate::feed::SocialUserProfile>,
-    feed_profile_error: Option<String>,
-    feed_loading_avatars: bool,
-    feed_avatars: Vec<crate::feed::FeedMedia>,
-    feed_avatars_error: Option<String>,
-    feed_loading_timeline: bool,
-    feed_items: Vec<crate::feed::FeedItem>,
-    feed_friend_profiles: Vec<crate::feed::SocialUserProfile>,
-    feed_search_query: String,
-    feed_pkt_owner_id: String,
-    feed_pkt_viewer_id: String,
-    feed_pkt_tab: u32,
-    feed_pkt_page: u32,
-    feed_pkt_count: u32,
+    conversation_sidebar_width: f32,
     contacts_view_open: bool,
     contacts_sub_tab: ContactsSubTab,
     contacts_search_query: String,
@@ -766,6 +764,7 @@ impl ZaloGuiApp {
             loaded_settings.block_seen,
         );
         let dark_mode = loaded_settings.theme_mode != "light";
+        let (drop_thumb_tx, drop_thumb_rx) = std::sync::mpsc::channel();
         ThemePalette::load_with_custom_override(dark_mode).apply_to_ctx(&cc.egui_ctx);
 
         let (tx, rx) = channel();
@@ -839,7 +838,8 @@ impl ZaloGuiApp {
             threads,
             reaction_inbox: crate::reactions::ReactionInbox::default(),
 
-            selected_thread_index,            thread_filter: ThreadFilter::All,
+            selected_thread_index,
+            thread_filter: ThreadFilter::All,
             search_query: String::new(),
             input_message: String::new(),
             replying_to: None,
@@ -858,7 +858,6 @@ impl ZaloGuiApp {
             profile_menu_open: false,
             wipe_confirm_open: false,
             toast_notice: None,
-            incoming_popup: None,
             phone_modal_open: false,
             phone_modal_input: String::new(),
             phone_lookup_loading: false,
@@ -899,8 +898,26 @@ impl ZaloGuiApp {
             composer_sticker_selected: None,
             composer_mention_selected: 0,
             dismissed_mention_suggest_for: String::new(),
+            composer_mentions: Vec::new(),
+            reply_auto_mention: None,
+            mention_last_query: String::new(),
+            mention_member_retry_at: HashMap::new(),
             composer_focus_pending: false,
             pending_clipboard_image: None,
+            pending_drop_files: Vec::new(),
+            gif_results: Vec::new(),
+            gif_seq: 0,
+            gif_loading: false,
+            gif_error: None,
+            gif_selected: 0,
+            gif_query_sent: None,
+            gif_query_seen: String::new(),
+            gif_query_changed_at: std::time::Instant::now(),
+            gif_dismissed_for: None,
+            gif_scroll_pending: false,
+            drop_thumb_tx,
+            drop_thumb_rx,
+            drop_zone_last: None,
             unread_counts: HashMap::new(),
             link_metadata_cache: HashMap::new(),
             loading_link_previews: HashSet::new(),
@@ -915,6 +932,7 @@ impl ZaloGuiApp {
             settings_modal_open: false,
             settings_tab: SettingsTab::General,
             notification_authorization: Default::default(),
+            startup_notification_request_sent: false,
             settings: loaded_settings,
             settings_blur_tex: None,
             settings_blur_req_at: None,
@@ -931,24 +949,7 @@ impl ZaloGuiApp {
             dev_tab: DevTab::Logs,
             selected_log: None,
             scanner_findings: Vec::new(),
-            feed_modal_open: false,
-            feed_modal_tab: FeedModalTab::Profile,
-            feed_target_uid: String::new(),
-            feed_loading_profile: false,
-            feed_profile: None,
-            feed_profile_error: None,
-            feed_loading_avatars: false,
-            feed_avatars: Vec::new(),
-            feed_avatars_error: None,
-            feed_loading_timeline: false,
-            feed_items: Vec::new(),
-            feed_friend_profiles: Vec::new(),
-            feed_search_query: String::new(),
-            feed_pkt_owner_id: String::new(),
-            feed_pkt_viewer_id: String::new(),
-            feed_pkt_tab: 0,
-            feed_pkt_page: 1,
-            feed_pkt_count: 20,
+            conversation_sidebar_width: 344.0,
             contacts_view_open: false,
             contacts_sub_tab: ContactsSubTab::Friends,
             contacts_search_query: String::new(),
@@ -1152,7 +1153,8 @@ impl ZaloGuiApp {
                                 }
                                 let added = existing.messages.len().saturating_sub(old_len);
                                 if added > 0 {
-                                    let seen = existing.unread.last_seen_id.as_deref().unwrap_or("");
+                                    let seen =
+                                        existing.unread.last_seen_id.as_deref().unwrap_or("");
                                     let inc_cnt = existing
                                         .messages
                                         .iter()
@@ -1211,50 +1213,18 @@ impl ZaloGuiApp {
                                                         } else {
                                                             preview_raw.to_string()
                                                         };
-                                                    let avt_url = existing
-                                                        .avatar
-                                                        .clone()
-                                                        .filter(|u| !u.trim().is_empty());
-                                                    if let Some(ref url) = avt_url {
-                                                        let tex_key = format!(
-                                                            "thumb_{}",
-                                                            crate::crypto::md5_hex(url)
-                                                        );
-                                                        if !self
-                                                            .sticker_textures
-                                                            .contains_key(&tex_key)
-                                                            && !self
-                                                                .loading_stickers
-                                                                .contains(&tex_key)
-                                                        {
-                                                            self.loading_stickers
-                                                                .insert(tex_key.clone());
-                                                            if let Some(tx) = WORKER_TX.get() {
-                                                                let _ = tx.send(
-                                                                    WorkerCmd::FetchStickerImage {
-                                                                        key: tex_key,
-                                                                        url: url.clone(),
-                                                                    },
-                                                                );
-                                                            }
+                                                    // Native OS notification replaces the old
+                                                    // self-drawn corner popup.
+                                                    if self.settings.enable_notifications {
+                                                        if let Some(tx) = WORKER_TX.get() {
+                                                            let _ = tx.send(
+                                                                WorkerCmd::PostNativeNotification {
+                                                                    title: sender_label,
+                                                                    body: preview_short,
+                                                                },
+                                                            );
                                                         }
                                                     }
-                                                    let unread_for_thread = self
-                                                        .unread_counts
-                                                        .get(&existing.id)
-                                                        .copied()
-                                                        .unwrap_or(1);
-                                                    self.incoming_popup =
-                                                        Some(IncomingPopupState {
-                                                            thread_id: existing.id.clone(),
-                                                            sender_name: sender_label,
-                                                            preview_text: preview_short,
-                                                            avatar_url: avt_url,
-                                                            is_group: existing.is_group,
-                                                            unread_total: unread_for_thread,
-                                                            created_at: std::time::Instant::now(),
-                                                            reply_draft: String::new(),
-                                                        });
                                                 }
                                             }
                                         }
@@ -1393,6 +1363,7 @@ impl ZaloGuiApp {
                     thread_id,
                     text,
                     msg_id,
+                    mentions,
                 } => {
                     if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                         t.preview = text.clone();
@@ -1403,19 +1374,22 @@ impl ZaloGuiApp {
                         } else {
                             msg_id
                         };
-                        merge_sent_message(
-                            t,
-                            ChatMessage {
-                                id: final_id,
-                                client_message_id,
-                                sender: "Tôi".into(),
-                                text,
-                                time: now,
-                                is_outgoing: true,
-                                ts: (crate::login::unix_now() * 1000) as i64,
-                                ..Default::default()
-                            },
-                        );
+                        let mut sent = ChatMessage {
+                            id: final_id,
+                            client_message_id,
+                            sender: "Tôi".into(),
+                            text,
+                            time: now,
+                            is_outgoing: true,
+                            ts: (crate::login::unix_now() * 1000) as i64,
+                            ..Default::default()
+                        };
+                        if !mentions.is_empty() {
+                            sent.wire_ref
+                                .fields
+                                .insert("mentions".into(), serde_json::Value::Array(mentions));
+                        }
+                        merge_sent_message(t, sent);
                         self.persist_threads_async();
                     }
                     self.status_msg = format!("Đã gửi tin nhắn lúc {}", crate::ui::clock());
@@ -1472,6 +1446,7 @@ impl ZaloGuiApp {
                     text,
                     msg_id,
                     quoted,
+                    mentions,
                 } => {
                     if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                         t.preview = text.clone();
@@ -1482,22 +1457,25 @@ impl ZaloGuiApp {
                         } else {
                             msg_id
                         };
-                        merge_sent_message(
-                            t,
-                            ChatMessage {
-                                id: final_id,
-                                client_message_id,
-                                sender: "Tôi".into(),
-                                text,
-                                time: now,
-                                is_outgoing: true,
-                                ts: (crate::login::unix_now() * 1000) as i64,
-                                reply_to_id: Some(quoted.id.clone()),
-                                reply_to_sender: Some(quoted.sender.clone()),
-                                reply_to_text: Some(quoted.text.clone()),
-                                ..Default::default()
-                            },
-                        );
+                        let mut sent = ChatMessage {
+                            id: final_id,
+                            client_message_id,
+                            sender: "Tôi".into(),
+                            text,
+                            time: now,
+                            is_outgoing: true,
+                            ts: (crate::login::unix_now() * 1000) as i64,
+                            reply_to_id: Some(quoted.id.clone()),
+                            reply_to_sender: Some(quoted.sender.clone()),
+                            reply_to_text: Some(quoted.text.clone()),
+                            ..Default::default()
+                        };
+                        if !mentions.is_empty() {
+                            sent.wire_ref
+                                .fields
+                                .insert("mentions".into(), serde_json::Value::Array(mentions));
+                        }
+                        merge_sent_message(t, sent);
                         self.persist_threads_async();
                     }
                     self.status_msg = format!("Đã gửi trả lời lúc {}", crate::ui::clock());
@@ -1659,7 +1637,12 @@ impl ZaloGuiApp {
                         self.sticker_textures.remove(&key);
                         ctx.request_repaint();
                     }
-                    self.loading_stickers.remove(&key);
+                    // A failed emoji raster is permanent (no font / no bitmap); keeping the key
+                    // in `loading_stickers` stops a re-request every frame and the renderer
+                    // falls back to the monochrome glyph.
+                    if !key.starts_with("emoji_") {
+                        self.loading_stickers.remove(&key);
+                    }
                 }
                 GuiEvent::StickerStoreLoaded(packs) => {
                     self.sticker_store_loading = false;
@@ -1694,6 +1677,15 @@ impl ZaloGuiApp {
                 GuiEvent::StickerSuggestKeywordsLoaded(kws) => {
                     for k in kws {
                         self.sticker_suggest_keywords.insert(k);
+                    }
+                }
+                GuiEvent::GifResults { seq, items, error } => {
+                    // Stale answers for an older query are ignored.
+                    if seq == self.gif_seq {
+                        self.gif_loading = false;
+                        self.gif_error = error;
+                        self.gif_results = items;
+                        self.gif_selected = 0;
                     }
                 }
                 GuiEvent::ComposerStickerSuggestions { keyword, items } => {
@@ -2047,42 +2039,6 @@ impl ZaloGuiApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     std::process::exit(0);
                 }
-                GuiEvent::SocialProfileLoaded(res) => {
-                    self.feed_loading_profile = false;
-                    match res {
-                        Ok(prof) => {
-                            self.feed_profile = Some(prof);
-                            self.feed_profile_error = None;
-                        }
-                        Err(e) => {
-                            self.feed_profile_error = Some(e);
-                        }
-                    }
-                }
-                GuiEvent::SocialAvatarsLoaded(res) => {
-                    self.feed_loading_avatars = false;
-                    match res {
-                        Ok(photos) => {
-                            self.feed_avatars = photos;
-                            self.feed_avatars_error = None;
-                        }
-                        Err(e) => {
-                            self.feed_avatars_error = Some(e);
-                        }
-                    }
-                }
-                GuiEvent::SocialTimelineLoaded(res) => {
-                    self.feed_loading_timeline = false;
-                    match res {
-                        Ok((profiles, items)) => {
-                            self.feed_friend_profiles = profiles;
-                            self.feed_items = items;
-                        }
-                        Err(e) => {
-                            self.feed_profile_error = Some(e);
-                        }
-                    }
-                }
                 GuiEvent::MuteSnapshotSynced(mute_map) => {
                     self.settings.muted_threads = mute_map.clone();
                     self.settings.save();
@@ -2249,8 +2205,7 @@ impl ZaloGuiApp {
                     } else {
                         // The server is authoritative: match each topic back to its bubble and drop
                         // stale local pin flags inside this thread.
-                        let pinned_ids: Vec<String> =
-                            topics.iter().map(|t| t.id.clone()).collect();
+                        let pinned_ids: Vec<String> = topics.iter().map(|t| t.id.clone()).collect();
                         if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                             let mut changed = false;
                             for m in t.messages.iter_mut() {
@@ -2413,10 +2368,10 @@ impl eframe::App for ZaloGuiApp {
 
             for event in &mut i.events {
                 match event {
-                    egui::Event::Ime(egui::ImeEvent::Enabled) => {
-                        self.ime_active = true;
-                        was_composing = true;
-                    }
+                    // `Enabled` only means a TextEdit gained focus and the IME may be used; it
+                    // carries no preedit. Treating it as "composing" left `ime_active` stuck true
+                    // until the first commit, which disabled @-popover keys and stripped Enter.
+                    egui::Event::Ime(egui::ImeEvent::Enabled) => {}
                     egui::Event::Ime(egui::ImeEvent::Preedit(text)) => {
                         self.ime_active = !text.is_empty();
                         if !text.is_empty() {
@@ -2482,6 +2437,7 @@ impl eframe::App for ZaloGuiApp {
 
         let pal = self.palette();
 
+        self.request_notification_permission_at_startup();
         Self::handle_frameless_resize(ctx);
         self.render_custom_title_bar(ctx, &pal);
         // Dev Inspector Panel
@@ -3136,6 +3092,33 @@ impl ZaloGuiApp {
                     });
                 });
         });
+    }
+
+    /// Ask macOS for notification permission once per launch, as soon as the worker is up.
+    /// macOS shows the prompt only while the status is `notDetermined`; later calls just
+    /// report the stored decision, which also refreshes the Settings panel.
+    fn request_notification_permission_at_startup(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            if self.startup_notification_request_sent {
+                return;
+            }
+            let Some(tx) = WORKER_TX.get() else {
+                return;
+            };
+            self.startup_notification_request_sent = true;
+            if let Some(request_id) = self.notification_authorization.begin() {
+                if tx
+                    .send(WorkerCmd::RequestNotificationAuthorization { request_id })
+                    .is_err()
+                {
+                    self.notification_authorization.finish(
+                        request_id,
+                        Err(crate::native_notifications::NotificationError::Io),
+                    );
+                }
+            }
+        }
     }
 
     fn show_toast(&mut self, msg: impl Into<String>) {

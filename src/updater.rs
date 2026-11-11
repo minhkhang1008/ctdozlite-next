@@ -596,12 +596,7 @@ pub fn parse_github_release_value(
 }
 
 /// Native update notifications are disabled in personal builds.
-pub fn notify_os_new_update(
-    _latest_version: &str,
-    _current_version: &str,
-    _release_title: &str,
-) {
-}
+pub fn notify_os_new_update(_latest_version: &str, _current_version: &str, _release_title: &str) {}
 
 #[cfg(test)]
 mod github_api_tests {

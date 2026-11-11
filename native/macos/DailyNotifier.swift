@@ -8,8 +8,13 @@ struct Payload: Decodable {
     let id: String
     let sound: Bool
     func validate() -> Bool {
-        // Never accept chat content, names, or other caller-controlled notification text.
-        title == "Zalo" && body == "You have a new message." && id.count == 64 && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        // Sender/group title and message preview are shown by owner request. The Rust caller
+        // flattens control characters and caps length; re-check those bounds here so a
+        // malformed caller cannot post multi-line or oversized banners. The id stays opaque.
+        func boundedText(_ text: String, _ limit: Int) -> Bool {
+            !text.isEmpty && text.count <= limit && !text.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        }
+        return boundedText(title, 120) && boundedText(body, 240) && id.count == 64 && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 }
 func statusName(_ status: UNAuthorizationStatus) -> String {
@@ -42,10 +47,13 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 let args = Array(CommandLine.arguments.dropFirst())
 if args == ["--self-test"] {
     guard Bundle.main.bundleIdentifier == bundleID, Bundle.main.bundleURL.pathExtension == "app" else { exit(1) }
-    let valid = Payload(title: "Zalo", body: "You have a new message.", id: String(repeating: "a", count: 64), sound: false)
-    let invalid = Payload(title: "Private Name", body: "Chat content", id: "raw-message", sound: true)
-    guard valid.validate(), !invalid.validate(), authorized(.authorized), !authorized(.denied), statusName(.notDetermined) == "notDetermined" else { exit(1) }
-    print("SELF_TEST: bundle identity, generic-only payload, opaque identity, and authorization gates PASS")
+    let valid = Payload(title: "Nhóm Gia đình", body: "Tin nhắn \"mới\"", id: String(repeating: "a", count: 64), sound: false)
+    let badID = Payload(title: "Name", body: "Body", id: "raw-message", sound: true)
+    let multiline = Payload(title: "Name", body: "line1\nline2", id: String(repeating: "a", count: 64), sound: false)
+    let oversized = Payload(title: String(repeating: "x", count: 121), body: "Body", id: String(repeating: "a", count: 64), sound: false)
+    let emoji = Payload(title: "👨‍👩‍👧 Gia đình", body: "ok", id: String(repeating: "b", count: 64), sound: false)
+    guard valid.validate(), emoji.validate(), !badID.validate(), !multiline.validate(), !oversized.validate(), authorized(.authorized), !authorized(.denied), statusName(.notDetermined) == "notDetermined" else { exit(1) }
+    print("SELF_TEST: bundle identity, bounded single-line payload, opaque identity, and authorization gates PASS")
     exit(0)
 }
 guard Bundle.main.bundleIdentifier == bundleID, Bundle.main.bundleURL.pathExtension == "app" else {

@@ -1,10 +1,21 @@
-//! Bounded macOS notification authorization bridge, without notification delivery.
+//! Bounded macOS notification bridge: authorization plus delivery of new-message alerts.
+//!
+//! Delivery prefers the bundled `DailyNotifier` helper (`.app` builds) and falls back to
+//! `osascript` when the helper binary is absent, e.g. under `cargo run`. Text always travels as
+//! data (JSON on stdin for the helper, `argv` for `osascript`), never spliced into a script.
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Longest notification title forwarded to the OS, in characters.
+const MAX_TITLE_CHARS: usize = 120;
+/// Longest notification body forwarded to the OS, in characters.
+const MAX_BODY_CHARS: usize = 240;
+/// Deadline for a single delivery attempt.
+const NOTIFY_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Authorization reported by the operating system helper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +59,8 @@ pub enum NotificationError {
     InvalidResponse,
     /// The child pipe could not be read.
     Io,
+    /// The operating system has not authorized notifications for the helper.
+    NotAuthorized,
 }
 impl std::fmt::Display for NotificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,6 +70,7 @@ impl std::fmt::Display for NotificationError {
             Self::Timeout => "Đọc quyền thông báo quá thời gian. Hãy thử lại.",
             Self::InvalidResponse => "Trợ giúp quyền thông báo trả kết quả không hợp lệ.",
             Self::Io => "Lỗi đọc kết quả quyền thông báo. Hãy thử lại.",
+            Self::NotAuthorized => "macOS chưa cho phép ứng dụng gửi thông báo.",
         })
     }
 }
@@ -85,11 +99,22 @@ async fn spawn_helper(
     path: &Path,
     command: &str,
 ) -> Result<tokio::process::Child, NotificationError> {
+    spawn_with(path, &[command], false).await
+}
+async fn spawn_with(
+    path: &Path,
+    args: &[&str],
+    piped_stdin: bool,
+) -> Result<tokio::process::Child, NotificationError> {
     let mut attempt = 0;
     loop {
         match tokio::process::Command::new(path)
-            .arg(command)
-            .stdin(Stdio::null())
+            .args(args)
+            .stdin(if piped_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
@@ -104,13 +129,22 @@ async fn spawn_helper(
         }
     }
 }
-async fn invoke(
-    path: &Path,
-    command: &str,
+/// Run a child to completion under `deadline`, returning its bounded stdout on exit status 0.
+async fn collect_output(
+    mut child: tokio::process::Child,
+    stdin_payload: Option<Vec<u8>>,
     deadline: Duration,
-) -> Result<AuthorizationStatus, NotificationError> {
-    let mut child = spawn_helper(path, command).await?;
+) -> Result<String, NotificationError> {
     let operation = async {
+        if let Some(payload) = stdin_payload {
+            let mut stdin = child.stdin.take().ok_or(NotificationError::Io)?;
+            stdin
+                .write_all(&payload)
+                .await
+                .map_err(|_| NotificationError::Io)?;
+            // Dropping stdin signals EOF to the helper.
+            drop(stdin);
+        }
         let mut output = Vec::new();
         child
             .stdout
@@ -131,11 +165,19 @@ async fn invoke(
         {
             return Err(NotificationError::InvalidResponse);
         }
-        parse_status(std::str::from_utf8(&output).map_err(|_| NotificationError::InvalidResponse)?)
+        String::from_utf8(output).map_err(|_| NotificationError::InvalidResponse)
     };
     tokio::time::timeout(deadline, operation)
         .await
         .map_err(|_| NotificationError::Timeout)?
+}
+async fn invoke(
+    path: &Path,
+    command: &str,
+    deadline: Duration,
+) -> Result<AuthorizationStatus, NotificationError> {
+    let child = spawn_helper(path, command).await?;
+    parse_status(&collect_output(child, None, deadline).await?)
 }
 fn parse_status(output: &str) -> Result<AuthorizationStatus, NotificationError> {
     match output.trim() {
@@ -176,6 +218,120 @@ pub async fn request_if_user_action(
         return Err(NotificationError::ExplicitUserActionRequired);
     }
     platform_invoke("--request", Duration::from_secs(120)).await
+}
+
+/// Collapse control characters (including newlines) to spaces and cap the length, so the OS
+/// banner stays one readable line and the helper's payload bounds always hold.
+fn sanitize(text: &str, max_chars: usize) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let trimmed = flat.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_owned();
+    }
+    let mut cut: String = trimmed.chars().take(max_chars.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+/// Opaque 64-hex request identifier required by the helper; it carries no message identity.
+fn opaque_id() -> String {
+    use sha2::{Digest, Sha256};
+    let mut seed = [0u8; 32];
+    if getrandom::fill(&mut seed).is_err() {
+        // Uniqueness only matters for not replacing an earlier banner.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        seed[..16].copy_from_slice(&nanos.to_le_bytes());
+    }
+    Sha256::digest(seed)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+fn helper_payload(title: &str, body: &str) -> Vec<u8> {
+    serde_json::json!({
+        "title": title,
+        "body": body,
+        "id": opaque_id(),
+        // The GUI already plays its own chime when sound is enabled.
+        "sound": false,
+    })
+    .to_string()
+    .into_bytes()
+}
+fn parse_delivery(output: &str) -> Result<(), NotificationError> {
+    match output.trim() {
+        "submitted" => Ok(()),
+        "notAuthorized" => Err(NotificationError::NotAuthorized),
+        _ => Err(NotificationError::InvalidResponse),
+    }
+}
+async fn notify_via_helper(path: &Path, title: &str, body: &str) -> Result<(), NotificationError> {
+    let child = spawn_with(path, &["--notify"], true).await?;
+    parse_delivery(
+        &collect_output(child, Some(helper_payload(title, body)), NOTIFY_DEADLINE).await?,
+    )
+}
+/// AppleScript that reads title and body from `argv`, so message text is never parsed as code.
+const OSASCRIPT_LINES: [&str; 3] = [
+    "on run argv",
+    "display notification (item 2 of argv) with title (item 1 of argv)",
+    "end run",
+];
+fn osascript_args<'a>(title: &'a str, body: &'a str) -> Vec<&'a str> {
+    let mut args = Vec::with_capacity(9);
+    for line in OSASCRIPT_LINES {
+        args.push("-e");
+        args.push(line);
+    }
+    // `--` ends option parsing so text starting with `-` stays a plain argument.
+    args.extend(["--", title, body]);
+    args
+}
+async fn notify_via_osascript(title: &str, body: &str) -> Result<(), NotificationError> {
+    let child = spawn_with(
+        Path::new("/usr/bin/osascript"),
+        &osascript_args(title, body),
+        false,
+    )
+    .await?;
+    collect_output(child, None, NOTIFY_DEADLINE)
+        .await
+        .map(|_| ())
+}
+/// Post a native new-message notification with `title` (sender or group) and `body` (preview).
+///
+/// Uses the bundled `DailyNotifier` helper when its binary exists, otherwise `osascript`.
+/// A helper that reports `notAuthorized` is not bypassed through `osascript`.
+///
+/// # Errors
+/// Returns a typed error for unsupported platforms, missing tools, deadlines, denied
+/// authorization or invalid helper output.
+pub async fn notify(title: &str, body: &str) -> Result<(), NotificationError> {
+    if !cfg!(target_os = "macos") {
+        return Err(NotificationError::HelperUnavailable);
+    }
+    let title = sanitize(title, MAX_TITLE_CHARS);
+    let body = sanitize(body, MAX_BODY_CHARS);
+    let title = if title.is_empty() {
+        "ctdozlite".to_owned()
+    } else {
+        title
+    };
+    let body = if body.is_empty() {
+        "Tin nhắn mới".to_owned()
+    } else {
+        body
+    };
+    let helper = helper_path();
+    if helper.is_file() {
+        return notify_via_helper(&helper, &title, &body).await;
+    }
+    notify_via_osascript(&title, &body).await
 }
 
 /// UI-owned sequence gate: at most one request is pending; stale completions are ignored.
@@ -230,6 +386,77 @@ mod tests {
                 Err(NotificationError::InvalidResponse)
             );
         }
+    }
+
+    #[test]
+    fn sanitize_flattens_controls_and_caps_length() {
+        assert_eq!(sanitize("  a\nb\tc\u{7}  ", 50), "a b c");
+        let long = "x".repeat(300);
+        let out = sanitize(&long, 120);
+        assert_eq!(out.chars().count(), 120);
+        assert!(out.ends_with('…'));
+        assert_eq!(sanitize("Tiếng Việt có dấu", 120), "Tiếng Việt có dấu");
+    }
+
+    #[test]
+    fn osascript_passes_text_only_as_argv_after_double_dash() {
+        let hostile = "\" \\ end run -- $(rm -rf ~) `x`";
+        let args = osascript_args("-Nhóm \"A\"", hostile);
+        let dash = args.iter().position(|a| *a == "--").unwrap();
+        assert_eq!(&args[dash + 1..], &["-Nhóm \"A\"", hostile]);
+        // Script lines are constants; no caller text appears before `--`.
+        for (i, a) in args[..dash].iter().enumerate() {
+            if i % 2 == 0 {
+                assert_eq!(*a, "-e");
+            } else {
+                assert!(OSASCRIPT_LINES.contains(a));
+            }
+        }
+    }
+
+    #[test]
+    fn helper_payload_is_json_with_opaque_hex_id() {
+        let raw = helper_payload("A \"quoted\" name", "line");
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["title"], "A \"quoted\" name");
+        assert_eq!(v["body"], "line");
+        assert_eq!(v["sound"], false);
+        let id = v["id"].as_str().unwrap();
+        assert_eq!(id.len(), 64);
+        assert!(id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        assert!(raw.len() <= 4096);
+    }
+
+    #[test]
+    fn delivery_parser_maps_helper_output() {
+        assert_eq!(parse_delivery("submitted\n"), Ok(()));
+        assert_eq!(
+            parse_delivery("notAuthorized"),
+            Err(NotificationError::NotAuthorized)
+        );
+        assert_eq!(
+            parse_delivery("failed"),
+            Err(NotificationError::InvalidResponse)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mock_helper_receives_notify_payload_on_stdin() {
+        let fixture =
+            Fixture::new("[ \"$1\" = --notify ] || exit 9; cat > \"$0.stdin\"; echo submitted");
+        assert_eq!(
+            notify_via_helper(&fixture.0.join("helper"), "Sender", "Body").await,
+            Ok(())
+        );
+        let stdin = std::fs::read(fixture.0.join("helper.stdin")).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&stdin).unwrap();
+        assert_eq!(
+            (v["title"].as_str(), v["body"].as_str()),
+            (Some("Sender"), Some("Body"))
+        );
     }
 
     #[tokio::test]

@@ -1687,6 +1687,130 @@ pub(crate) async fn send_group_message_with_client_id(
     Ok(resp)
 }
 
+/// A member tagged from the composer: `uid` (`"-1"` for @All) and the display name inserted
+/// after `@`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionPick {
+    pub uid: String,
+    pub name: String,
+}
+
+/// Build Zalo's `mentionInfo` array for `text`.
+///
+/// Each entry is `{"pos","uid","len","type"}` where `pos`/`len` are UTF-16 offsets covering
+/// `@Name` (including the `@`) and `type` is `1` for @All (`uid == "-1"`), else `0`. This is
+/// the same shape the app already parses from incoming `mentions` (`unread.rs`); see
+/// `re-notes/38_group_mentions.md`. Picks whose `@Name` is no longer in the text are dropped;
+/// repeated tags of the same person each get their own entry.
+pub fn build_mention_info(text: &str, picks: &[MentionPick]) -> Vec<Value> {
+    let mut spans: Vec<(usize, usize, &MentionPick)> = Vec::new();
+    // Longest names first so "@Hải Đăng" never claims the start of "@Hải Đăng Nguyễn".
+    let mut ordered: Vec<&MentionPick> = picks.iter().filter(|p| !p.name.is_empty()).collect();
+    ordered.sort_by_key(|p| std::cmp::Reverse(p.name.len()));
+    ordered.dedup_by(|a, b| a.uid == b.uid && a.name == b.name);
+    for pick in ordered {
+        let needle = format!("@{}", pick.name);
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(&needle) {
+            let start = from + rel;
+            let end = start + needle.len();
+            from = end;
+            let boundary_ok = text[end..]
+                .chars()
+                .next()
+                .map_or(true, |c| !c.is_alphanumeric());
+            let overlaps = spans.iter().any(|(s, e, _)| start < *e && *s < end);
+            if boundary_ok && !overlaps {
+                spans.push((start, end, pick));
+            }
+        }
+    }
+    spans.sort_by_key(|(start, _, _)| *start);
+    spans
+        .into_iter()
+        .map(|(start, end, pick)| {
+            json!({
+                "pos": text[..start].encode_utf16().count(),
+                "uid": pick.uid,
+                "len": text[start..end].encode_utf16().count(),
+                "type": if pick.uid == "-1" { 1 } else { 0 },
+            })
+        })
+        .collect()
+}
+
+/// Send a group text that tags members (`POST {domains.group}/api/group/mention`).
+///
+/// Without any resolvable tag this is exactly `send_group_message_with_client_id`. If the
+/// mention endpoint rejects the request (anything but an expired session), the text is resent
+/// through `sendmsg` so the message is not lost, just untagged.
+pub(crate) async fn send_group_mention_message_with_client_id(
+    s: &Session,
+    grid: &str,
+    text: &str,
+    now: u64,
+    picks: &[MentionPick],
+) -> Result<Value> {
+    if s.login.is_none() {
+        anyhow::bail!("chưa đăng nhập");
+    }
+    let (clean_text, text_props_opt) = extract_zalo_rtf_text_properties(text);
+    let mentions = build_mention_info(&clean_text, picks);
+    if mentions.is_empty() {
+        return send_group_message_with_client_id(s, grid, text, now).await;
+    }
+    let clean_grid = grid
+        .trim_start_matches("group_")
+        .trim_start_matches('g')
+        .trim_start_matches('G');
+    let mut body = obj(&[
+        ("grid", json!(clean_grid)),
+        ("message", json!(clean_text)),
+        ("mentionInfo", json!(Value::Array(mentions).to_string())),
+        ("clientId", json!(now)),
+        ("imei", json!(s.imei)),
+        ("ttl", json!(0)),
+        ("visibility", json!(0)),
+    ]);
+    if let (Some(tp), Some(map)) = (text_props_opt, body.as_object_mut()) {
+        map.insert("textProperties".into(), json!(tp));
+    }
+    let attempt: Result<Value> = async {
+        let params = s.encoded_params(&body)?;
+        let url = format!(
+            "{}/api/group/mention?{}",
+            s.domains.group,
+            s.common_params()
+        );
+        let resp = s.post_form(&url, format!("params={params}")).await?;
+        let resp = s.maybe_decrypt(resp, s.session_key_bytes()).await;
+        if let Some(code) = resp.get("error_code").and_then(Value::as_i64) {
+            if code != 0 {
+                let msg = resp
+                    .get("error_message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                return Err(crate::session::SessionError::new(code, msg).into());
+            }
+        }
+        Ok(resp)
+    }
+    .await;
+    match attempt {
+        Ok(resp) => Ok(resp),
+        Err(e)
+            if crate::session::SessionStatus::from_error(&e)
+                == crate::session::SessionStatus::Expired =>
+        {
+            Err(e)
+        }
+        Err(e) => {
+            crate::logger::log_error("chat::send_group_mention", &e.to_string());
+            send_group_message_with_client_id(s, grid, text, now).await
+        }
+    }
+}
+
 /// Format a byte count into a human-readable size string (e.g. `"1.4 MB"`, `"320 KB"`).
 pub fn format_file_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
@@ -3426,6 +3550,217 @@ pub async fn search_stickers_by_keyword(s: &Session, keyword: &str) -> Result<Ve
     Ok(out)
 }
 
+/// One Giphy result as served by Zalo's GIF service (`data.data_list[]`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GifItem {
+    /// Giphy content id (sent back as `contentId`).
+    pub id: String,
+    /// Full animation (`original.url`), sent as `href`.
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+    /// Lighter rendition (`normal.url`), sent as `thumb` and used for the picker grid.
+    pub thumb: String,
+}
+
+/// `SGG_SRC_SEARCH_INPUTBOX`: GIF picked through the composer `@gif` command.
+pub const GIF_SRC_COMPOSER_COMMAND: i32 = 7;
+
+fn gif_service_host(s: &Session, key: &str) -> String {
+    let configured = match key {
+        "file" => s.domains.file.as_str(),
+        _ => s.domains.sticker.as_str(),
+    };
+    if configured.is_empty() {
+        crate::endpoints::service(key)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        configured.trim_end_matches('/').to_string()
+    }
+}
+
+/// Parse `data_list` from a (decrypted) GIF trending/search response.
+/// See `re-notes/39_gif_search_send.md` for the item shape.
+pub fn parse_gif_list(resp: &Value) -> Vec<GifItem> {
+    let list = resp
+        .get("data")
+        .and_then(|d| d.get("data_list"))
+        .or_else(|| resp.get("data_list"))
+        .and_then(Value::as_array);
+    let Some(list) = list else {
+        return Vec::new();
+    };
+    let dim = |v: Option<&Value>| -> u32 {
+        v.and_then(|x| {
+            x.as_u64()
+                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+        })
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32
+    };
+    list.iter()
+        .filter_map(|it| {
+            let id = match it.get("id")? {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => return None,
+            };
+            let original = it.get("original")?;
+            let url = original.get("url")?.as_str()?.to_string();
+            if !crate::session::is_trusted_zalo_url(&url) {
+                return None;
+            }
+            let thumb = it
+                .get("normal")
+                .and_then(|n| n.get("url"))
+                .and_then(Value::as_str)
+                .filter(|u| crate::session::is_trusted_zalo_url(u))
+                .unwrap_or(&url)
+                .to_string();
+            Some(GifItem {
+                id,
+                url,
+                width: dim(original.get("width")),
+                height: dim(original.get("height")),
+                thumb,
+            })
+        })
+        .collect()
+}
+
+/// Trending GIFs (`getGifTrending`, cmd 11296): `GET {sticker}/api/message/giphy/trending`.
+pub async fn gif_trending(s: &Session, offset: u32, limit: u32) -> Result<Vec<GifItem>> {
+    let body = obj(&[
+        ("offset", json!(offset)),
+        ("limit", json!(limit)),
+        ("imei", json!(s.imei)),
+    ]);
+    let url = format!(
+        "{}/api/message/giphy/trending?{}&params={}",
+        gif_service_host(s, "sticker"),
+        s.common_params(),
+        s.encoded_params(&body)?
+    );
+    let resp = s.get(&url).await?;
+    let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
+    Ok(parse_gif_list(&dec))
+}
+
+/// Keyword GIF search (`searchGif`, cmd 11297): `GET {sticker}/api/message/giphy/search`.
+pub async fn gif_search(
+    s: &Session,
+    keyword: &str,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<GifItem>> {
+    let body = obj(&[
+        ("keyword", json!(keyword)),
+        ("offset", json!(offset)),
+        ("limit", json!(limit)),
+    ]);
+    let url = format!(
+        "{}/api/message/giphy/search?{}&params={}",
+        gif_service_host(s, "sticker"),
+        s.common_params(),
+        s.encoded_params(&body)?
+    );
+    let resp = s.get(&url).await?;
+    let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
+    Ok(parse_gif_list(&dec))
+}
+
+/// Request params for `sendGif` (see `re-notes/39_gif_search_send.md`).
+pub(crate) fn gif_send_body(
+    to_id: &str,
+    is_group: bool,
+    item: &GifItem,
+    src: i32,
+    client_id: u64,
+) -> Value {
+    let mut body = obj(&[
+        ("thumb", json!(item.thumb)),
+        ("width", json!(item.width)),
+        ("height", json!(item.height)),
+        ("msg", json!("")),
+        ("type", json!(0)),
+        ("href", json!(item.url)),
+        ("contentId", json!(item.id)),
+    ]);
+    if let Some(map) = body.as_object_mut() {
+        if is_group {
+            map.insert("visibility".into(), json!(0));
+        }
+        map.insert("src".into(), json!(src));
+        if is_group {
+            let grid = to_id
+                .trim_start_matches("group_")
+                .trim_start_matches('g')
+                .trim_start_matches('G');
+            map.insert("grid".into(), json!(grid));
+        } else {
+            map.insert("toid".into(), json!(to_id));
+        }
+        // The web client sends `JSON.stringify(clientId)`, i.e. a string.
+        map.insert("clientId".into(), json!(client_id.to_string()));
+    }
+    body
+}
+
+/// Send a Giphy GIF (`sendGif`): `POST {file}/api/{message|group}/gif?…&params=<AES>` with an
+/// empty body. Returns the server response and a local echo message rendered like a photo.
+pub async fn send_gif_with_client_id(
+    s: &Session,
+    to_id: &str,
+    is_group: bool,
+    item: &GifItem,
+    src: i32,
+    client_id: u64,
+) -> Result<(Value, ChatMessage)> {
+    if s.login.is_none() {
+        anyhow::bail!("chưa đăng nhập");
+    }
+    let body = gif_send_body(to_id, is_group, item, src, client_id);
+    let url = format!(
+        "{}/api/{}/gif?{}&params={}",
+        gif_service_host(s, "file"),
+        if is_group { "group" } else { "message" },
+        s.common_params(),
+        s.encoded_params(&body)?
+    );
+    let resp = s.post_form(&url, String::new()).await?;
+    let resp = s.maybe_decrypt(resp, s.session_key_bytes()).await;
+    if let Some(code) = resp.get("error_code").and_then(Value::as_i64) {
+        if code != 0 {
+            let msg = resp
+                .get("error_message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(crate::session::SessionError::new(code, msg).into());
+        }
+    }
+    let msg_id = resp
+        .get("data")
+        .and_then(|d| pick_str(d, &["msgId"]))
+        .or_else(|| pick_str(&resp, &["msgId"]))
+        .unwrap_or_else(|| format!("out_{client_id}"));
+    let cm = ChatMessage {
+        id: msg_id,
+        client_message_id: client_id.to_string(),
+        sender: "Tôi".into(),
+        text: "[GIF]".into(),
+        time: crate::ui::clock(),
+        is_outgoing: true,
+        ts: client_id as i64,
+        link_url: Some(item.url.clone()),
+        link_title: Some(format!("GIF ({}×{})", item.width, item.height)),
+        link_thumb: Some(item.thumb.clone()),
+        link_src: Some("Hình ảnh Zalo".into()),
+        ..Default::default()
+    };
+    Ok((resp, cm))
+}
+
 /// Send a quote/reply message (`sendQuoteMessage` / `sendGroupQuoteMessage` in `compact-app-pc.b7bec208c4c8f73e09f8.js:14317494`):
 /// - 1-1 (`cmd 11771`): `POST {domains.chat}/api/message/quote?{common}`
 /// - Group (`cmd 11197`): `POST {domains.group}/api/group/quote?{common}`
@@ -3449,6 +3784,23 @@ pub(crate) async fn send_quote_message_with_client_id(
     quoted: &ChatMessage,
     is_group: bool,
     now: u64,
+) -> Result<Value> {
+    send_quote_message_with_mentions(s, to_id, text, quoted, is_group, now, &[]).await
+}
+
+/// Quote reply that may also tag group members.
+///
+/// Group quotes with resolvable tags carry `mentionInfo` (same JSON-string shape as
+/// `group/mention`) on `group/quote`; see `re-notes/38_group_mentions.md`. Tags are ignored for
+/// 1-1 chats. If the quote fails, a tagged text goes out through `group/mention` instead.
+pub(crate) async fn send_quote_message_with_mentions(
+    s: &Session,
+    to_id: &str,
+    text: &str,
+    quoted: &ChatMessage,
+    is_group: bool,
+    now: u64,
+    picks: &[MentionPick],
 ) -> Result<Value> {
     if s.login.is_none() {
         anyhow::bail!("chưa đăng nhập");
@@ -3505,8 +3857,17 @@ pub(crate) async fn send_quote_message_with_client_id(
                 ("imei", json!(s.imei)),
                 ("zsource", json!(101)),
             ]);
-            if let (Some(tp), Some(map)) = (text_props_opt, body.as_object_mut()) {
-                map.insert("textProperties".into(), json!(tp));
+            let mentions = build_mention_info(&clean_text, picks);
+            if let Some(map) = body.as_object_mut() {
+                if let Some(tp) = text_props_opt {
+                    map.insert("textProperties".into(), json!(tp));
+                }
+                if !mentions.is_empty() {
+                    map.insert(
+                        "mentionInfo".into(),
+                        json!(Value::Array(mentions).to_string()),
+                    );
+                }
             }
             let params = s.encoded_params(&body)?;
             let url = format!("{}/api/group/quote?{}", s.domains.group, s.common_params());
@@ -3563,7 +3924,7 @@ pub(crate) async fn send_quote_message_with_client_id(
         Ok(r) => Ok(r),
         Err(_) => {
             if is_group {
-                send_group_message_with_client_id(s, to_id, text, now).await
+                send_group_mention_message_with_client_id(s, to_id, text, now, picks).await
             } else {
                 send_message_with_client_id(s, to_id, text, now).await
             }
@@ -6769,9 +7130,7 @@ pub fn parse_board_topics(resp: &Value) -> Vec<BoardTopic> {
         let mut msg_ids: Vec<String> = Vec::new();
         if let Some(params) = item.get("params") {
             let params = match params {
-                Value::String(txt) => {
-                    serde_json::from_str::<Value>(txt).unwrap_or(Value::Null)
-                }
+                Value::String(txt) => serde_json::from_str::<Value>(txt).unwrap_or(Value::Null),
                 other => other.clone(),
             };
             collect_msg_ids(&params, &mut msg_ids);
@@ -6921,8 +7280,6 @@ pub async fn list_board_topics(
 
     anyhow::bail!("{}", errors.join(" · "))
 }
-
-
 
 /// Pin or unpin a conversation (`updatePinnedConversationsV2` @ `compact-app-pc.js:14354215`, cmd `12122`).
 pub async fn update_pinned_conversation(
@@ -8813,6 +9170,100 @@ mod message_state_defaults_tests {
 #[cfg(test)]
 mod send_identity_tests {
     use super::*;
+
+    #[test]
+    fn parse_gif_list_reads_original_and_normal_renditions() {
+        let resp = json!({"error_code":0,"data":{"data_list":[
+            {"id":"1234567890123456789",
+             "original":{"url":"https://zgif-v2.zdn.vn/a.gif?z-cors=no","width":"480","height":270},
+             "normal":{"url":"https://zgif-v2.zdn.vn/a.png?z-cors=no","width":200,"height":113}},
+            {"id":5,"original":{"url":"https://evil.example/x.gif","width":1,"height":1}},
+            {"original":{"url":"https://zgif-v2.zdn.vn/noid.gif"}}
+        ]}});
+        let items = parse_gif_list(&resp);
+        assert_eq!(
+            items.len(),
+            1,
+            "untrusted host and id-less items are dropped"
+        );
+        assert_eq!(items[0].id, "1234567890123456789");
+        assert_eq!((items[0].width, items[0].height), (480, 270));
+        assert_eq!(items[0].thumb, "https://zgif-v2.zdn.vn/a.png?z-cors=no");
+    }
+
+    #[test]
+    fn gif_send_body_matches_web_client_fields() {
+        let item = GifItem {
+            id: "42".into(),
+            url: "https://zgif-v2.zdn.vn/a.gif".into(),
+            width: 480,
+            height: 270,
+            thumb: "https://zgif-v2.zdn.vn/a.png".into(),
+        };
+        let one = gif_send_body("123", false, &item, GIF_SRC_COMPOSER_COMMAND, 999);
+        assert_eq!(one["toid"], "123");
+        assert_eq!(one["clientId"], "999");
+        assert_eq!(one["href"], item.url);
+        assert_eq!(one["thumb"], item.thumb);
+        assert_eq!(one["contentId"], "42");
+        assert_eq!(one["type"], 0);
+        assert_eq!(one["msg"], "");
+        assert_eq!(one["src"], 7);
+        assert!(one.get("visibility").is_none() && one.get("grid").is_none());
+        let grp = gif_send_body("group_777", true, &item, 1, 5);
+        assert_eq!(grp["grid"], "777");
+        assert_eq!(grp["visibility"], 0);
+        assert!(grp.get("toid").is_none());
+    }
+
+    #[test]
+    fn build_mention_info_uses_utf16_offsets_including_at_sign() {
+        let picks = vec![
+            MentionPick {
+                uid: "111".into(),
+                name: "Nguyễn Hoàng Hải Đăng".into(),
+            },
+            MentionPick {
+                uid: "-1".into(),
+                name: "All".into(),
+            },
+            MentionPick {
+                uid: "222".into(),
+                name: "Gone".into(),
+            },
+        ];
+        let text = "😀 @Nguyễn Hoàng Hải Đăng ơi, @All họp nhé";
+        let info = build_mention_info(text, &picks);
+        assert_eq!(info.len(), 2, "picks absent from the text are dropped");
+        // "😀 " is 3 UTF-16 units; "@Nguyễn Hoàng Hải Đăng" is 22.
+        assert_eq!(
+            info[0],
+            json!({"pos": 3, "uid": "111", "len": 22, "type": 0})
+        );
+        let all_pos = text[..text.find("@All").unwrap()].encode_utf16().count();
+        assert_eq!(
+            info[1],
+            json!({"pos": all_pos, "uid": "-1", "len": 4, "type": 1})
+        );
+    }
+
+    #[test]
+    fn build_mention_info_prefers_longest_name_and_requires_word_boundary() {
+        let picks = vec![
+            MentionPick {
+                uid: "1".into(),
+                name: "Hải".into(),
+            },
+            MentionPick {
+                uid: "2".into(),
+                name: "Hải Đăng".into(),
+            },
+        ];
+        let info = build_mention_info("@Hải Đăng và @Hảiz", &picks);
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0]["uid"], "2");
+        assert_eq!(info[0]["len"], 9);
+    }
 
     #[test]
     fn request_ids_are_unique_when_sends_share_a_clock_tick() {

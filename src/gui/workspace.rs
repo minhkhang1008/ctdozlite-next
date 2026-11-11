@@ -35,7 +35,7 @@ impl ZaloGuiApp {
         let screen_w = screen_rect.width();
         let is_compact_w = screen_w < 880.0;
         let is_narrow_w = screen_w < 620.0;
-        let left_rail_w = if is_narrow_w { 52.0 } else { 62.0 };
+        let left_rail_w = if is_narrow_w { 52.0 } else { 64.0 };
 
         // -------------------------------------------------------------------
         // 1. LEFT NAVIGATION RAIL (Replaces top bar & bottom bar)
@@ -46,14 +46,13 @@ impl ZaloGuiApp {
             .frame(
                 egui::Frame::none()
                     .fill(pal.bg_app)
-                    .inner_margin(Margin::symmetric(if is_narrow_w { 4.0 } else { 8.0 }, 14.0))
-                    .stroke(Stroke::new(1.0_f32, pal.border)),
+                    .inner_margin(Margin::symmetric(if is_narrow_w { 2.0 } else { 8.0 }, 16.0)),
             )
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     // User Avatar Button with Cutout Online Status Dot
                     let (av_rect, av_resp) =
-                        ui.allocate_exact_size(Vec2::new(40.0, 40.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     let user_disp = if self.user_name.is_empty() {
                         "Người dùng Zalo"
                     } else {
@@ -62,7 +61,7 @@ impl ZaloGuiApp {
                     paint_user_avatar(
                         ui.painter(),
                         av_rect.center(),
-                        20.0,
+                        24.0,
                         user_disp,
                         false,
                         self.user_avatar.as_deref(),
@@ -72,8 +71,8 @@ impl ZaloGuiApp {
                     if av_resp.hovered() || self.profile_menu_open {
                         ui.painter().circle_stroke(
                             av_rect.center(),
-                            21.0,
-                            Stroke::new(2.0_f32, pal.primary_hover),
+                            25.0,
+                            Stroke::new(2.0_f32, pal.nav_icon),
                         );
                     }
                     // Cutout status dot
@@ -98,38 +97,31 @@ impl ZaloGuiApp {
                         self.profile_menu_open = !self.profile_menu_open;
                     }
 
-                    ui.add_space(18.0);
+                    ui.add_space(24.0);
 
                     // Navigation Icon 1: Tin nhắn (All / Active Chat)
-                    let is_msg_nav = !self.feed_modal_open
-                        && !self.contacts_view_open
-                        && self.thread_filter == ThreadFilter::All;
+                    let is_msg_nav =
+                        !self.contacts_view_open && self.thread_filter == ThreadFilter::All;
                     let (nav1_rect, nav1_resp) =
-                        ui.allocate_exact_size(Vec2::new(42.0, 42.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     if is_msg_nav {
                         ui.painter().rect_filled(
                             nav1_rect,
-                            Rounding::same(11.0),
-                            pal.primary.linear_multiply(0.18),
+                            Rounding::same(6.0),
+                            pal.nav_selected_bg,
                         );
-                        let pill = Rect::from_min_size(
-                            Pos2::new(nav1_rect.left() - 6.0, nav1_rect.center().y - 10.0),
-                            Vec2::new(3.5, 20.0),
-                        );
-                        ui.painter()
-                            .rect_filled(pill, Rounding::same(2.0), pal.primary);
                     } else if nav1_resp.hovered() {
                         ui.painter()
-                            .rect_filled(nav1_rect, Rounding::same(11.0), pal.bg_hover);
+                            .rect_filled(nav1_rect, Rounding::same(6.0), pal.nav_hover_bg);
                     }
                     draw_icon_chat_nav(
                         ui.painter(),
                         nav1_rect.center(),
-                        19.0,
+                        26.0,
                         if is_msg_nav {
-                            pal.primary_hover
+                            pal.nav_icon_active
                         } else {
-                            pal.text_secondary
+                            pal.nav_icon
                         },
                     );
                     let nav_unread: usize = self.unread_counts.values().sum();
@@ -150,11 +142,8 @@ impl ZaloGuiApp {
                             Pos2::new(nav1_rect.right() - 6.0, nav1_rect.top() + 7.0),
                             Vec2::new(bw, 15.0),
                         );
-                        ui.painter().rect_filled(
-                            badge_rect,
-                            Rounding::same(7.5),
-                            Color32::from_rgb(239, 56, 56),
-                        );
+                        ui.painter()
+                            .rect_filled(badge_rect, Rounding::same(7.5), pal.danger);
                         ui.painter().rect_stroke(
                             badge_rect,
                             Rounding::same(7.5),
@@ -173,12 +162,11 @@ impl ZaloGuiApp {
                         .on_hover_text("Tin nhắn")
                         .clicked()
                     {
-                        self.feed_modal_open = false;
                         self.contacts_view_open = false;
                         self.thread_filter = ThreadFilter::All;
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
 
                     // Navigation Icon 2: Danh bạ (Unified Friends + Groups + Invites matching Zalo PC)
                     let direct_cnt = self
@@ -187,33 +175,27 @@ impl ZaloGuiApp {
                         .filter(|t| !t.is_group && !t.name.contains("Cloud của tôi"))
                         .count();
                     let group_cnt = self.threads.iter().filter(|t| t.is_group).count();
-                    let is_contacts_nav = !self.feed_modal_open && self.contacts_view_open;
+                    let is_contacts_nav = self.contacts_view_open;
                     let (nav2_rect, nav2_resp) =
-                        ui.allocate_exact_size(Vec2::new(42.0, 42.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     if is_contacts_nav {
                         ui.painter().rect_filled(
                             nav2_rect,
-                            Rounding::same(11.0),
-                            pal.primary.linear_multiply(0.18),
+                            Rounding::same(6.0),
+                            pal.nav_selected_bg,
                         );
-                        let pill = Rect::from_min_size(
-                            Pos2::new(nav2_rect.left() - 6.0, nav2_rect.center().y - 10.0),
-                            Vec2::new(3.5, 20.0),
-                        );
-                        ui.painter()
-                            .rect_filled(pill, Rounding::same(2.0), pal.primary);
                     } else if nav2_resp.hovered() {
                         ui.painter()
-                            .rect_filled(nav2_rect, Rounding::same(11.0), pal.bg_hover);
+                            .rect_filled(nav2_rect, Rounding::same(6.0), pal.nav_hover_bg);
                     }
                     draw_icon_contacts(
                         ui.painter(),
                         nav2_rect.center(),
-                        19.0,
+                        26.0,
                         if is_contacts_nav {
-                            pal.primary_hover
+                            pal.nav_icon_active
                         } else {
-                            pal.text_secondary
+                            pal.nav_icon
                         },
                     );
                     if nav2_resp
@@ -221,40 +203,38 @@ impl ZaloGuiApp {
                         .on_hover_text(format!("Danh bạ ({direct_cnt} bạn bè · {group_cnt} nhóm)"))
                         .clicked()
                     {
-                        self.feed_modal_open = false;
                         self.contacts_view_open = !self.contacts_view_open;
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
 
                     // Navigation Icon 3: Cloud của tôi
-                    let is_cloud_selected = !self.feed_modal_open
-                        && !self.contacts_view_open
+                    let is_cloud_selected = !self.contacts_view_open
                         && self
                             .threads
                             .get(self.selected_thread_index)
                             .map(|t| t.name.contains("Cloud của tôi"))
                             .unwrap_or(false);
                     let (nav3_rect, nav3_resp) =
-                        ui.allocate_exact_size(Vec2::new(42.0, 42.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     if is_cloud_selected {
                         ui.painter().rect_filled(
                             nav3_rect,
-                            Rounding::same(11.0),
-                            pal.primary.linear_multiply(0.18),
+                            Rounding::same(6.0),
+                            pal.nav_selected_bg,
                         );
                     } else if nav3_resp.hovered() {
                         ui.painter()
-                            .rect_filled(nav3_rect, Rounding::same(11.0), pal.bg_hover);
+                            .rect_filled(nav3_rect, Rounding::same(6.0), pal.nav_hover_bg);
                     }
                     draw_icon_cloud(
                         ui.painter(),
                         nav3_rect.center(),
-                        19.0,
+                        26.0,
                         if is_cloud_selected {
-                            pal.primary_hover
+                            pal.nav_icon_active
                         } else {
-                            pal.text_secondary
+                            pal.nav_icon
                         },
                     );
                     if nav3_resp
@@ -262,7 +242,6 @@ impl ZaloGuiApp {
                         .on_hover_text("Cloud của tôi")
                         .clicked()
                     {
-                        self.feed_modal_open = false;
                         self.contacts_view_open = false;
                         if let Some((cidx, cthread)) = self
                             .threads
@@ -282,66 +261,25 @@ impl ZaloGuiApp {
                         }
                     }
 
-                    ui.add_space(6.0);
-
-                    // Navigation Icon 4: Nhật ký (Social Feed & Profile)
-                    let (nav4_rect, nav4_resp) =
-                        ui.allocate_exact_size(Vec2::new(42.0, 42.0), Sense::click());
-                    if self.feed_modal_open {
-                        ui.painter().rect_filled(
-                            nav4_rect,
-                            Rounding::same(11.0),
-                            pal.primary.linear_multiply(0.18),
-                        );
-                        let pill = Rect::from_min_size(
-                            Pos2::new(nav4_rect.left() - 6.0, nav4_rect.center().y - 10.0),
-                            Vec2::new(3.5, 20.0),
-                        );
-                        ui.painter()
-                            .rect_filled(pill, Rounding::same(2.0), pal.primary);
-                    } else if nav4_resp.hovered() {
-                        ui.painter()
-                            .rect_filled(nav4_rect, Rounding::same(11.0), pal.bg_hover);
-                    }
-                    draw_icon_feed(
-                        ui.painter(),
-                        nav4_rect.center(),
-                        19.0,
-                        if self.feed_modal_open {
-                            pal.primary_hover
-                        } else {
-                            pal.text_secondary
-                        },
-                    );
-                    if nav4_resp
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .on_hover_text("Tường nhà / Nhật ký bạn bè")
-                        .clicked()
-                    {
-                        self.contacts_view_open = false;
-                        self.feed_modal_open = true;
-                        self.trigger_feed_timeline_load();
-                    }
-
                     // Push bottom actions to the bottom of the Left Rail
-                    let rem_h = (ui.available_height() - 100.0).max(12.0);
+                    let rem_h = (ui.available_height() - 112.0).max(12.0);
                     ui.add_space(rem_h);
 
                     // Bottom Action 1: Background Sync Indicator Icon
                     let (sync_rect, sync_resp) =
-                        ui.allocate_exact_size(Vec2::new(40.0, 40.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     if sync_resp.hovered() {
                         ui.painter()
-                            .rect_filled(sync_rect, Rounding::same(10.0), pal.bg_hover);
+                            .rect_filled(sync_rect, Rounding::same(6.0), pal.nav_hover_bg);
                     }
                     draw_icon_refresh(
                         ui.painter(),
                         sync_rect.center(),
-                        17.0,
+                        26.0,
                         if sync_resp.hovered() {
-                            pal.accent_online
+                            pal.nav_icon_active
                         } else {
-                            pal.text_secondary
+                            pal.nav_icon
                         },
                     );
                     ui.painter().circle_filled(
@@ -370,7 +308,7 @@ impl ZaloGuiApp {
                         self.show_toast("📲 Đang gửi yêu cầu đồng bộ tin nhắn tới điện thoại…");
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
 
                     // Bottom Action 2: Theme / Settings Icon
                     // Bottom Action 2: Settings Modal Button
@@ -380,27 +318,25 @@ impl ZaloGuiApp {
                         .map(|u| u.has_update)
                         .unwrap_or(false);
                     let (set_rect, set_resp) =
-                        ui.allocate_exact_size(Vec2::new(40.0, 40.0), Sense::click());
+                        ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::click());
                     if self.settings_modal_open {
                         ui.painter().rect_filled(
                             set_rect,
-                            Rounding::same(10.0),
-                            pal.primary.linear_multiply(0.18),
+                            Rounding::same(6.0),
+                            pal.nav_selected_bg,
                         );
                     } else if set_resp.hovered() {
                         ui.painter()
-                            .rect_filled(set_rect, Rounding::same(10.0), pal.bg_hover);
+                            .rect_filled(set_rect, Rounding::same(6.0), pal.nav_hover_bg);
                     }
                     draw_icon_settings(
                         ui.painter(),
                         set_rect.center(),
-                        17.5,
+                        26.0,
                         if self.settings_modal_open {
-                            pal.primary_hover
-                        } else if set_resp.hovered() {
-                            pal.text_primary
+                            pal.nav_icon_active
                         } else {
-                            pal.text_secondary
+                            pal.nav_icon
                         },
                     );
                     if has_upd_badge {
@@ -449,37 +385,21 @@ impl ZaloGuiApp {
             self.render_schedule_modal(ctx, pal);
             return;
         }
-        if self.feed_modal_open {
-            self.render_feed_page(ctx, pal);
-            self.render_profile_popover(ctx, pal);
-            self.render_wipe_confirm(ctx, pal);
-            self.render_toast_overlay(ctx, pal);
-            self.render_forward_dialog(ctx, pal);
-            self.render_reactions_dialog(ctx, pal);
-            self.render_call_overlay(ctx, pal);
-            self.render_image_viewer_modal(ctx, pal);
-            self.render_phone_lookup_modal(ctx, pal);
-            self.render_settings_modal(ctx, pal);
-            return;
-        }
         // -------------------------------------------------------------------
         // 2. CONVERSATION LIST SIDEBAR (Responsive width, auto-adapts on resize)
         // -------------------------------------------------------------------
         let (sidebar_id, sidebar_min_w, sidebar_max_w) = if is_narrow_w {
             ("conversation_sidebar_narrow", 68.0_f32, 68.0_f32)
         } else {
-            (
-                "conversation_sidebar",
-                180.0_f32,
-                (screen_w * 0.42).clamp(240.0, 420.0),
-            )
+            ("conversation_sidebar", 200.0_f32, 520.0_f32)
         };
         let sidebar_default_w = if is_narrow_w {
             68.0_f32
         } else {
-            280.0_f32.min(screen_w * 0.35).max(sidebar_min_w)
+            self.conversation_sidebar_width
+                .clamp(sidebar_min_w, sidebar_max_w)
         };
-        egui::SidePanel::left(sidebar_id)
+        let sidebar_response = egui::SidePanel::left(sidebar_id)
             .resizable(!is_narrow_w)
             .default_width(sidebar_default_w)
             .width_range(sidebar_min_w..=sidebar_max_w)
@@ -489,11 +409,12 @@ impl ZaloGuiApp {
                     .stroke(Stroke::new(1.0_f32, pal.border)),
             )
             .show(ctx, |ui| {
+                ui.set_width(ui.available_width());
                 egui::Frame::none()
                     .inner_margin(Margin {
-                        left: if is_narrow_w { 4.0 } else { 14.0 },
-                        right: if is_narrow_w { 4.0 } else { 14.0 },
-                        top: 12.0,
+                        left: if is_narrow_w { 4.0 } else { 16.0 },
+                        right: if is_narrow_w { 4.0 } else { 16.0 },
+                        top: 16.0,
                         bottom: 0.0,
                     })
                     .show(ui, |ui| {
@@ -529,45 +450,37 @@ impl ZaloGuiApp {
                             let avail_row_w = ui.available_width();
                             let mut trigger_phone_lookup: Option<String> = None;
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                let search_box_w = (avail_row_w - 38.0).max(110.0);
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                let search_box_w = (avail_row_w - 40.0).max(110.0);
                                 let has_q = !self.search_query.is_empty();
                                 let (sbox_rect, _) = ui.allocate_exact_size(
                                     Vec2::new(search_box_w, 32.0),
                                     Sense::hover(),
                                 );
+                                // Zalo PC: borderless 32px well, 5px corners.
                                 ui.painter().rect_filled(
                                     sbox_rect,
-                                    Rounding::same(8.0),
+                                    Rounding::same(5.0),
                                     pal.bg_input,
                                 );
-                                ui.painter().rect_stroke(
-                                    sbox_rect,
-                                    Rounding::same(8.0),
-                                    Stroke::new(
-                                        1.0_f32,
-                                        if has_q {
-                                            pal.primary.linear_multiply(0.65)
-                                        } else {
-                                            pal.border
-                                        },
-                                    ),
-                                );
+                                if has_q {
+                                    ui.painter().rect_stroke(
+                                        sbox_rect,
+                                        Rounding::same(5.0),
+                                        Stroke::new(1.0_f32, pal.primary_hover),
+                                    );
+                                }
                                 draw_icon_search(
                                     ui.painter(),
-                                    Pos2::new(sbox_rect.left() + 16.0, sbox_rect.center().y),
-                                    13.5,
-                                    if has_q {
-                                        pal.primary_hover
-                                    } else {
-                                        pal.text_muted
-                                    },
+                                    Pos2::new(sbox_rect.left() + 15.0, sbox_rect.center().y),
+                                    16.0,
+                                    pal.text_secondary,
                                 );
                                 let edit_rect = Rect::from_min_max(
-                                    Pos2::new(sbox_rect.left() + 28.0, sbox_rect.top() + 5.0),
+                                    Pos2::new(sbox_rect.left() + 30.0, sbox_rect.top() + 6.0),
                                     Pos2::new(
                                         sbox_rect.right() - if has_q { 26.0 } else { 8.0 },
-                                        sbox_rect.bottom() - 5.0,
+                                        sbox_rect.bottom() - 6.0,
                                     ),
                                 );
                                 let s_resp = ui.put(
@@ -575,7 +488,7 @@ impl ZaloGuiApp {
                                     egui::TextEdit::singleline(&mut self.search_query)
                                         .id(Id::new("sidebar_search_input"))
                                         .frame(false)
-                                        .hint_text("Tìm hội thoại, tin nhắn, SĐT...")
+                                        .hint_text("Tìm kiếm")
                                         .desired_width(edit_rect.width()),
                                 );
                                 let is_ime_busy = self.ime_active || self.ime_just_committed;
@@ -634,38 +547,19 @@ impl ZaloGuiApp {
                                 // Add Friend / Lookup by Phone Button (`+👤`)
                                 let (add_rect, add_resp) =
                                     ui.allocate_exact_size(Vec2::new(32.0, 32.0), Sense::click());
-                                ui.painter().rect_filled(
-                                    add_rect,
-                                    Rounding::same(8.0),
-                                    if self.phone_modal_open {
-                                        pal.primary.linear_multiply(0.22)
-                                    } else if add_resp.hovered() {
-                                        pal.bg_hover
-                                    } else {
-                                        pal.bg_input
-                                    },
-                                );
-                                ui.painter().rect_stroke(
-                                    add_rect,
-                                    Rounding::same(8.0),
-                                    Stroke::new(
-                                        1.0_f32,
-                                        if self.phone_modal_open || add_resp.hovered() {
-                                            pal.primary
-                                        } else {
-                                            pal.border
-                                        },
-                                    ),
-                                );
+                                // Zalo PC: frameless tertiary icon button, hover tint only.
+                                if self.phone_modal_open || add_resp.hovered() {
+                                    ui.painter().rect_filled(
+                                        add_rect,
+                                        Rounding::same(3.0),
+                                        pal.bg_hover,
+                                    );
+                                }
                                 draw_icon_user_plus(
                                     ui.painter(),
                                     add_rect.center(),
-                                    16.5,
-                                    if self.phone_modal_open || add_resp.hovered() {
-                                        pal.primary_hover
-                                    } else {
-                                        pal.text_secondary
-                                    },
+                                    20.0,
+                                    pal.text_primary,
                                 );
                                 if add_resp
                                     .on_hover_cursor(CursorIcon::PointingHand)
@@ -695,35 +589,30 @@ impl ZaloGuiApp {
                                     let _ = tx.send(WorkerCmd::LookupPhone { phone: phone_str });
                                 }
                             }
-                            ui.add_space(10.0);
+                            ui.add_space(14.0);
 
-                            // Clean Underline Segmented Tabs (`Tất cả`, `Cá nhân`, `Nhóm`) + `Đã ghim (1)`
+                            // Keep tab labels compact so synced counters cannot force the panel wider.
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 16.0;
                                 let group_tab_cnt =
                                     self.threads.iter().filter(|t| t.is_group).count();
-                                let group_tab_label = if group_tab_cnt > 0 {
-                                    format!("Nhóm ({group_tab_cnt})")
-                                } else {
-                                    "Nhóm".to_string()
-                                };
                                 for (filter, label) in [
                                     (ThreadFilter::All, "Tất cả".to_string()),
                                     (ThreadFilter::Direct, "Cá nhân".to_string()),
-                                    (ThreadFilter::Groups, group_tab_label),
+                                    (ThreadFilter::Groups, "Nhóm".to_string()),
                                 ] {
                                     let active = self.thread_filter == filter;
                                     let text_w = ui.fonts(|f| {
                                         f.layout_no_wrap(
                                             label.clone(),
-                                            FontId::proportional(12.5),
+                                            FontId::proportional(14.0),
                                             pal.text_primary,
                                         )
                                         .size()
                                         .x
                                     });
                                     let (tab_rect, tab_resp) = ui.allocate_exact_size(
-                                        Vec2::new(text_w + 4.0, 26.0),
+                                        Vec2::new(text_w, 30.0),
                                         Sense::click(),
                                     );
                                     let fg = if active {
@@ -734,10 +623,10 @@ impl ZaloGuiApp {
                                         pal.text_secondary
                                     };
                                     ui.painter().text(
-                                        Pos2::new(tab_rect.center().x, tab_rect.top() + 8.0),
+                                        Pos2::new(tab_rect.center().x, tab_rect.top() + 11.0),
                                         egui::Align2::CENTER_CENTER,
                                         &label,
-                                        FontId::proportional(12.5),
+                                        FontId::proportional(14.0),
                                         fg,
                                     );
                                     if active {
@@ -747,7 +636,7 @@ impl ZaloGuiApp {
                                                 Pos2::new(tab_rect.left(), line_y),
                                                 Pos2::new(tab_rect.right(), line_y),
                                             ],
-                                            Stroke::new(2.2_f32, pal.primary),
+                                            Stroke::new(2.0_f32, pal.primary_hover),
                                         );
                                     }
                                     if tab_resp.on_hover_cursor(CursorIcon::PointingHand).clicked()
@@ -785,30 +674,6 @@ impl ZaloGuiApp {
                                         }
                                     }
                                 }
-
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    let pinned_cnt = self
-                                        .threads
-                                        .iter()
-                                        .filter(|t| {
-                                            t.name.contains("Cloud của tôi")
-                                                || t.presentation.pinned
-                                                || self.settings.pinned_threads.contains(&t.id)
-                                                || crate::chat::is_pinned_in_list(
-                                                    &t.id,
-                                                    t.is_group,
-                                                    &self.settings.pinned_threads,
-                                                )
-                                        })
-                                        .count();
-                                    if pinned_cnt > 0 {
-                                        ui.label(
-                                            RichText::new(format!("Đã ghim ({pinned_cnt})"))
-                                                .size(11.0)
-                                                .color(pal.text_muted),
-                                        );
-                                    }
-                                });
                             });
                         }
                     });
@@ -1011,11 +876,14 @@ impl ZaloGuiApp {
                 }
                 let mut pending_ctx_action: Option<ThreadCtxAction> = None;
                 let now_unix = crate::login::unix_now() as i64;
-                let row_target_w = (ui.available_width() - 8.0).max(44.0);
                 egui::ScrollArea::vertical()
                     .id_salt("threads_list_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // Measure inside the viewport: the solid scrollbar reserves 10px, so a
+                        // width taken from the outer panel overflows by 2px and the SidePanel
+                        // re-stores that wider rect every frame, undoing any manual resize.
+                        let row_target_w = (ui.available_width() - 8.0).max(44.0);
                         ui.add_space(4.0);
                         for &i in &filtered_indices {
                             let t = &self.threads[i];
@@ -1040,12 +908,13 @@ impl ZaloGuiApp {
                             let is_hidden = self.settings.hidden_threads.contains(&t.id)
                                 || t.presentation.hidden;
                             let cur_label = self.settings.thread_labels.get(&t.id).cloned();
-                            let row_height = if is_narrow_w { 50.0 } else { 58.0 };
+                            // Zalo PC: 70px row card inside a 4px/8px margin (78px slot).
+                            let row_height = if is_narrow_w { 56.0 } else { 78.0 };
                             let (alloc_rect, row_resp) = ui.allocate_exact_size(
                                 Vec2::new(row_target_w, row_height),
                                 Sense::click(),
                             );
-                            let row_rect = alloc_rect.translate(Vec2::new(4.0, 0.0));
+                            let row_rect = alloc_rect.shrink2(Vec2::new(4.0, 4.0));
                             // Space is still allocated so the scrollbar is right, but off-screen rows
                             // skip painting, and with it the avatar download/texture for every thread.
                             if !ui.is_rect_visible(row_rect) {
@@ -1060,27 +929,14 @@ impl ZaloGuiApp {
                                 Color32::TRANSPARENT
                             };
 
-                            ui.painter().rect_filled(row_rect, Rounding::same(11.0), bg);
-
-                            // Left active indicator bar (`w-1 bg-zalo-500 rounded-r-full`)
-                            if is_selected {
-                                let bar_rect = Rect::from_min_size(
-                                    Pos2::new(row_rect.left() + 1.0, row_rect.top() + 10.0),
-                                    Vec2::new(3.5, 38.0),
-                                );
-                                ui.painter().rect_filled(
-                                    bar_rect,
-                                    Rounding::same(2.0),
-                                    pal.primary,
-                                );
-                            }
+                            ui.painter().rect_filled(row_rect, Rounding::same(6.0), bg);
 
                             // Avatar circle with real user/group image & Cutout Status Dot
-                            let av_radius = if is_narrow_w { 18.0 } else { 20.5 };
+                            let av_radius = if is_narrow_w { 20.0 } else { 24.0 };
                             let avatar_center = if is_narrow_w {
                                 row_rect.center()
                             } else {
-                                Pos2::new(row_rect.left() + 29.0, row_rect.center().y)
+                                Pos2::new(row_rect.left() + 32.0, row_rect.center().y)
                             };
                             paint_user_avatar(
                                 ui.painter(),
@@ -1116,57 +972,47 @@ impl ZaloGuiApp {
                             // Only show text labels when sidebar is expanded
                             if !is_narrow_w {
                                 // Thread Name
-                                let text_left = row_rect.left() + 58.0;
+                                let text_left = row_rect.left() + 68.0;
                                 let name_color = if is_selected && pal.is_dark {
                                     Color32::WHITE
                                 } else {
                                     pal.text_primary
                                 };
                                 let max_name_chars = if is_compact_w { 15 } else { 21 };
-                                let name_x = if t.is_group {
-                                    draw_icon_contacts(
-                                        ui.painter(),
-                                        Pos2::new(text_left + 7.0, row_rect.top() + 19.5),
-                                        12.5,
-                                        pal.primary,
-                                    );
-                                    text_left + 18.0
-                                } else {
-                                    text_left
-                                };
+                                let name_x = text_left;
                                 let display_name = truncate_chars(&t.name, max_name_chars);
                                 ui.painter().text(
                                     Pos2::new(name_x, row_rect.top() + 12.0),
                                     egui::Align2::LEFT_TOP,
                                     display_name,
-                                    FontId::proportional(13.6),
+                                    FontId::proportional(16.0),
                                     name_color,
                                 );
 
                                 // Pin icon + Timestamp (top-right)
-                                let time_right = row_rect.right() - 9.0;
+                                let time_right = row_rect.right() - 8.0;
                                 if !t.time.is_empty() {
                                     let tw = ui.fonts(|f| {
                                         f.layout_no_wrap(
                                             t.time.clone(),
-                                            FontId::proportional(11.0),
-                                            pal.text_muted,
+                                            FontId::proportional(12.0),
+                                            pal.text_secondary,
                                         )
                                         .size()
                                         .x
                                     });
                                     ui.painter().text(
-                                        Pos2::new(time_right, row_rect.top() + 13.5),
+                                        Pos2::new(time_right, row_rect.top() + 15.0),
                                         egui::Align2::RIGHT_TOP,
                                         &t.time,
-                                        FontId::proportional(11.0),
-                                        pal.text_muted,
+                                        FontId::proportional(12.0),
+                                        pal.text_secondary,
                                     );
                                     let mut icon_right = time_right - tw - 9.0;
                                     if is_pinned_cloud {
                                         draw_icon_pin(
                                             ui.painter(),
-                                            Pos2::new(icon_right, row_rect.top() + 19.5),
+                                            Pos2::new(icon_right, row_rect.top() + 24.0),
                                             11.0,
                                             pal.text_muted,
                                         );
@@ -1174,7 +1020,7 @@ impl ZaloGuiApp {
                                     }
                                     if is_muted {
                                         ui.painter().text(
-                                            Pos2::new(icon_right + 4.0, row_rect.top() + 13.5),
+                                            Pos2::new(icon_right + 4.0, row_rect.top() + 15.0),
                                             egui::Align2::RIGHT_TOP,
                                             "🔕",
                                             FontId::proportional(10.5),
@@ -1192,7 +1038,7 @@ impl ZaloGuiApp {
                                         _ => Color32::from_rgb(59, 130, 246),
                                     };
                                     ui.painter().circle_filled(
-                                        Pos2::new(text_left - 8.0, row_rect.top() + 39.5),
+                                        Pos2::new(text_left - 8.0, row_rect.top() + 49.5),
                                         3.5,
                                         tag_col,
                                     );
@@ -1247,10 +1093,10 @@ impl ZaloGuiApp {
                                 };
                                 let snippet = truncate_chars(&raw_preview, max_snip_chars);
                                 ui.painter().text(
-                                    Pos2::new(text_left, row_rect.top() + 33.5),
+                                    Pos2::new(text_left, row_rect.top() + 39.0),
                                     egui::Align2::LEFT_TOP,
                                     snippet,
-                                    FontId::proportional(12.0),
+                                    FontId::proportional(14.0),
                                     if is_typing_in_t {
                                         pal.primary
                                     } else if unread_n > 0 {
@@ -1269,7 +1115,7 @@ impl ZaloGuiApp {
                                     let b_rect = Rect::from_min_size(
                                         Pos2::new(
                                             row_rect.right() - bw - 8.0,
-                                            row_rect.top() + 31.5,
+                                            row_rect.top() + 41.0,
                                         ),
                                         Vec2::new(bw, 17.0),
                                     );
@@ -1700,7 +1546,7 @@ impl ZaloGuiApp {
                 if let Some((idx, tid, is_group)) = clicked_thread {
                     let resolved_idx = self.threads.iter().position(|t| t.id == tid).unwrap_or(idx);
                     if self.selected_thread_index != resolved_idx {
-                        self.replying_to = None;
+                        self.cancel_reply();
                         self.filter_starred_only = false;
                         self.force_scroll_to_bottom = true;
                         self.chat_render_window = (tid.clone(), CHAT_RENDER_STEP);
@@ -1925,6 +1771,13 @@ impl ZaloGuiApp {
                     }
                 }
             });
+        if !is_narrow_w {
+            self.conversation_sidebar_width = sidebar_response
+                .response
+                .rect
+                .width()
+                .clamp(sidebar_min_w, sidebar_max_w);
+        }
 
         // Extract lightweight metadata for Header, Right Info Drawer, and Central Chat Stream
         let thread_meta = self.threads.get(self.selected_thread_index).map(|t| {
@@ -1941,7 +1794,6 @@ impl ZaloGuiApp {
         // 3. COLLAPSIBLE RIGHT CONVERSATION INFO DRAWER (responsive width)
         // -------------------------------------------------------------------
         let mut open_chat_member: Option<crate::chat::SidebarMember> = None;
-        let mut view_profile_member: Option<String> = None;
         let show_info_drawer = self.info_drawer_open && !is_compact_w;
         let drawer_w = (screen_w * 0.26).clamp(240.0, 310.0);
 
@@ -2045,7 +1897,10 @@ impl ZaloGuiApp {
                                                     format!("{} Đã kết bạn · {lbl}", lucide::CHECK),
                                                     pal.text_secondary,
                                                 ),
-                                                _ => (format!("{} Đã kết bạn", lucide::CHECK), pal.text_secondary),
+                                                _ => (
+                                                    format!("{} Đã kết bạn", lucide::CHECK),
+                                                    pal.text_secondary,
+                                                ),
                                             },
                                             crate::chat::FriendshipStatus::IncomingPending => (
                                                 "📩 Đã gửi lời mời kết bạn cho bạn".into(),
@@ -2125,38 +1980,6 @@ impl ZaloGuiApp {
                                             self.filter_starred_only = !self.filter_starred_only;
                                         }
                                     });
-                                    if !d_is_group && !d_is_cloud {
-                                        ui.add_space(6.0);
-                                        let prof_btn = egui::Button::new(
-                                            RichText::new(format!(
-                                                "{} Xem Hồ sơ & Nhật ký",
-                                                lucide::NEWSPAPER
-                                            ))
-                                            .size(11.5)
-                                            .color(pal.primary_hover),
-                                        )
-                                        .fill(pal.primary.linear_multiply(0.12))
-                                        .stroke(Stroke::new(1.0_f32, pal.primary))
-                                        .rounding(Rounding::same(8.0))
-                                        .min_size(Vec2::new(192.0, 28.0));
-                                        if ui
-                                            .add(prof_btn)
-                                            .on_hover_cursor(CursorIcon::PointingHand)
-                                            .clicked()
-                                        {
-                                            self.feed_modal_open = true;
-                                            self.feed_modal_tab = FeedModalTab::Profile;
-                                            self.feed_target_uid = d_id.clone();
-                                            self.feed_loading_profile = true;
-                                            self.feed_profile_error = None;
-                                            self.trigger_feed_timeline_load();
-                                            if let Some(tx) = WORKER_TX.get() {
-                                                let _ = tx.send(WorkerCmd::FetchSocialProfile {
-                                                    target_uid: d_id.clone(),
-                                                });
-                                            }
-                                        }
-                                    }
                                 });
                             });
 
@@ -2356,26 +2179,6 @@ impl ZaloGuiApp {
                                                                 if chat_btn.clicked() {
                                                                     open_chat_member =
                                                                         Some(m.clone());
-                                                                }
-
-                                                                let prof_btn = ui
-                                                                    .add(
-                                                                        egui::Button::new(
-                                                                            RichText::new("🪪")
-                                                                                .size(10.5),
-                                                                        )
-                                                                        .fill(Color32::TRANSPARENT)
-                                                                        .frame(false),
-                                                                    )
-                                                                    .on_hover_cursor(
-                                                                        CursorIcon::PointingHand,
-                                                                    )
-                                                                    .on_hover_text(
-                                                                        "Xem trang cá nhân",
-                                                                    );
-                                                                if prof_btn.clicked() {
-                                                                    view_profile_member =
-                                                                        Some(m.id.clone());
                                                                 }
                                                             },
                                                         );
@@ -2597,18 +2400,6 @@ impl ZaloGuiApp {
             self.show_toast(format!("Đã mở cuộc trò chuyện với {}", m.name));
         }
 
-        if let Some(uid) = view_profile_member {
-            self.feed_modal_open = true;
-            self.feed_modal_tab = FeedModalTab::Profile;
-            self.feed_target_uid = uid.clone();
-            self.feed_loading_profile = true;
-            self.feed_profile_error = None;
-            self.trigger_feed_timeline_load();
-            if let Some(tx) = WORKER_TX.get() {
-                let _ = tx.send(WorkerCmd::FetchSocialProfile { target_uid: uid });
-            }
-        }
-
         // -------------------------------------------------------------------
         // 4. CENTRAL CHAT AREA (Clean Header, Messages Stream, Icon Toolbar)
         // -------------------------------------------------------------------
@@ -2651,17 +2442,17 @@ impl ZaloGuiApp {
                     // 1. Clean Conversation Header Bar (No raw 19-digit ID, no bulky sync button)
                     egui::Frame::none()
                         .fill(pal.bg_sidebar)
-                        .inner_margin(Margin::symmetric(18.0, 11.0))
+                        .inner_margin(Margin::symmetric(16.0, 10.0)) // 68px tall like Zalo PC
                         .stroke(Stroke::new(1.0_f32, pal.border))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                // Header Avatar (40x40) with Cutout Online Dot
+                                // Header Avatar (48x48) with Cutout Online Dot
                                 let (av_rect, _) =
-                                    ui.allocate_exact_size(Vec2::new(40.0, 40.0), Sense::hover());
+                                    ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::hover());
                                 paint_user_avatar(
                                     ui.painter(),
                                     av_rect.center(),
-                                    20.0,
+                                    24.0,
                                     &thread_name,
                                     is_group,
                                     thread_avatar.as_deref(),
@@ -2677,14 +2468,14 @@ impl ZaloGuiApp {
                                     ui.painter().circle_filled(dot_pos, 6.2, pal.bg_sidebar);
                                     ui.painter().circle_filled(dot_pos, 4.2, pal.accent_online);
                                 }
-                                ui.add_space(6.0);
+                                ui.add_space(4.0);
                                 // Reserve room for the right-hand action cluster so the name/tag
                                 // block can never be overlapped by the call buttons.
                                 let actions_w = if is_compact_w { 126.0 } else { 182.0 };
                                 let left_info_w =
                                     (ui.available_width() - actions_w).max(60.0);
                                 ui.allocate_ui_with_layout(
-                                    Vec2::new(left_info_w, 40.0),
+                                    Vec2::new(left_info_w, 48.0),
                                     Layout::top_down(Align::Min),
                                     |ui| {
                                         ui.spacing_mut().item_spacing.y = 2.0;
@@ -2696,9 +2487,8 @@ impl ZaloGuiApp {
                                                         &thread_name,
                                                         name_max,
                                                     ))
-                                                    .size(15.0)
-                                                    .color(pal.text_primary)
-                                                    .strong(),
+                                                    .size(18.0)
+                                                    .color(pal.text_primary),
                                                 )
                                                 .truncate(),
                                             );
@@ -3646,12 +3436,33 @@ impl ZaloGuiApp {
                     let posting_restricted = self.threads.get(self.selected_thread_index)
                         .is_some_and(|thread| thread.is_group && thread.presentation.posting_restricted == Some(true));
 
-                    let active_mention_info = if self.settings.suggest_mentions {
+                    if self.input_message.trim().is_empty() {
+                        self.composer_mentions.clear();
+                    }
+                    // Composer `@gif <keyword>` command (re-notes/39).
+                    let gif_query: Option<String> = if self.settings.enable_gif_search && !posting_restricted {
+                        gif_command_query(&self.input_message).map(str::to_string)
+                    } else {
+                        None
+                    };
+                    let gif_mode = gif_query.is_some()
+                        && self.gif_dismissed_for.as_deref() != Some(self.input_message.as_str());
+                    self.update_gif_search(ctx, gif_mode, gif_query.as_deref());
+                    let active_mention_info = if self.settings.suggest_mentions && gif_query.is_none() {
                         extract_active_mention_query(&self.input_message)
                             .map(|(pos, q)| (pos, q.to_string()))
                     } else {
                         None
                     };
+                    let mention_query_now = active_mention_info
+                        .as_ref()
+                        .map(|(_, q)| q.clone())
+                        .unwrap_or_default();
+                    if mention_query_now != self.mention_last_query {
+                        // A new or narrowed query starts at the first suggestion.
+                        self.composer_mention_selected = 0;
+                        self.mention_last_query = mention_query_now;
+                    }
                     let mut mention_candidates: Vec<MentionCandidate> = Vec::new();
                     if let Some((_, ref query)) = active_mention_info {
                         if &self.dismissed_mention_suggest_for != query {
@@ -3673,40 +3484,47 @@ impl ZaloGuiApp {
                                     });
                                 }
 
-                                if let Some(members) = self.group_members_map.get(&thread_id) {
-                                    for m in members {
-                                        if m.name.trim().is_empty() {
-                                            continue;
-                                        }
-                                        if q_trim.is_empty() {
-                                            mention_candidates.push(MentionCandidate {
-                                                id: m.id.clone(),
-                                                name: m.name.clone(),
-                                                avatar: m.avatar.clone(),
-                                                role: m.role.clone(),
-                                                is_all: false,
+                                let members: Vec<crate::chat::SidebarMember> = self
+                                    .group_members_map
+                                    .get(&thread_id)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                if members.is_empty() {
+                                    // A failed/empty fetch used to be cached forever, leaving only
+                                    // "@All". Retry at most every 20 s while the popover is open.
+                                    let due = self
+                                        .mention_member_retry_at
+                                        .get(&thread_id)
+                                        .map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(20));
+                                    if due && self.fetching_group_members.insert(thread_id.clone()) {
+                                        self.mention_member_retry_at
+                                            .insert(thread_id.clone(), std::time::Instant::now());
+                                        if let Some(tx) = WORKER_TX.get() {
+                                            let _ = tx.send(WorkerCmd::FetchGroupMembers {
+                                                group_id: thread_id.clone(),
                                             });
-                                        } else {
-                                            let m_fold = crate::chat::strip_vn_for_sticker_kw(&m.name);
-                                            if m.name.to_lowercase().contains(&q_trim.to_lowercase())
-                                                || m_fold.contains(&q_fold)
-                                            {
-                                                mention_candidates.push(MentionCandidate {
-                                                    id: m.id.clone(),
-                                                    name: m.name.clone(),
-                                                    avatar: m.avatar.clone(),
-                                                    role: m.role.clone(),
-                                                    is_all: false,
-                                                });
-                                            }
                                         }
                                     }
-                                } else if self.fetching_group_members.insert(thread_id.clone()) {
-                                    if let Some(tx) = WORKER_TX.get() {
-                                        let _ = tx.send(WorkerCmd::FetchGroupMembers {
-                                            group_id: thread_id.clone(),
-                                        });
+                                }
+                                let pool = if members.is_empty() {
+                                    self.threads
+                                        .get(self.selected_thread_index)
+                                        .map(|t| mention_fallback_from_messages(&t.messages))
+                                        .unwrap_or_default()
+                                } else {
+                                    members
+                                };
+                                for m in &pool {
+                                    if m.name.trim().is_empty() || !mention_name_matches(&m.name, q_trim, &q_fold) {
+                                        continue;
                                     }
+                                    mention_candidates.push(MentionCandidate {
+                                        id: m.id.clone(),
+                                        name: m.name.clone(),
+                                        avatar: m.avatar.clone(),
+                                        role: m.role.clone(),
+                                        is_all: false,
+                                    });
                                 }
                             } else {
                                 let p_name = thread_name.clone();
@@ -3745,7 +3563,8 @@ impl ZaloGuiApp {
                             64.0
                         } else {
                             0.0
-                        }) };
+                        })
+                        + (if self.pending_drop_files.is_empty() { 0.0 } else { PENDING_DROP_STRIP_H }) };
                     let mut pending_action: Option<(usize, BubbleAction)> = None;
                     let mut load_older_clicked = false;
                     let mut custom_toast: Option<String> = None;
@@ -4028,6 +3847,19 @@ impl ZaloGuiApp {
                                                     } else {
                                                         &thread_name
                                                     };
+                                                    // Reactor id -> display name for the reaction-pill tooltip.
+                                                    let reactor_name = |id: &str| -> String {
+                                                        if id == "0" || (!self.user_uin.is_empty() && id == self.user_uin) {
+                                                            return "Bạn".to_string();
+                                                        }
+                                                        if let Some(name) = member_name_by_uid.get(id) {
+                                                            return name.clone();
+                                                        }
+                                                        if !is_group {
+                                                            return thread_name.to_string();
+                                                        }
+                                                        "Người dùng Zalo".to_string()
+                                                    };
                                                     if let Some(action) = render_chat_bubble(
                                                         ui,
                                                         msg,
@@ -4042,6 +3874,7 @@ impl ZaloGuiApp {
                                                         &mut self.loading_stickers,
                                                         &self.emoji_textures,
                                                         idx,
+                                                        &reactor_name,
                                                     ) {
                                                         pending_action = Some((idx, action));
                                                     }
@@ -4139,8 +3972,12 @@ impl ZaloGuiApp {
                         if let Some(m) = target {
                             match action {
                                 BubbleAction::Reply => {
-                                    self.replying_to = Some(m);
-                                    self.composer_focus_pending = true;
+                                    let tag = if is_group && !m.is_outgoing {
+                                        reply_mention_for(&m, &member_name_by_uid, &self.user_uin)
+                                    } else {
+                                        None
+                                    };
+                                    self.start_reply(ctx, &thread_id, m, tag);
                                 }
                                 BubbleAction::Mention(name) => {
                                     let tag = format!("@{} ", name);
@@ -4425,7 +4262,8 @@ impl ZaloGuiApp {
                                 });
                         }
                         if cancel {
-                            self.replying_to = None;
+                            self.cancel_reply();
+                            self.composer_focus_pending = true;
                         }
                     }
                     // 3b-2. Live Typing Indicator Banner
@@ -4535,6 +4373,9 @@ impl ZaloGuiApp {
                         }
                     }
 
+                    // 3c-2. Dropped files waiting to be sent ("Xem trước khi gửi" zone)
+                    self.render_pending_drop_files(ui, pal);
+
                     // 3d. Pending Scheduled Messages Banner (#38)
                     let thread_sched: Vec<crate::scheduler::ScheduledMessage> = self
                         .scheduled_items
@@ -4588,30 +4429,9 @@ impl ZaloGuiApp {
                     // 4. Bottom Message Composer Bar (Compact Icon Actions + Spacious Input + Padded Send Button)
                     let composer_frame = egui::Frame::none()
                         .fill(pal.bg_sidebar)
-                        .inner_margin(Margin::symmetric(14.0, 10.0))
+                        .inner_margin(Margin::symmetric(12.0, 10.0))
                         .stroke(Stroke::new(1.0_f32, pal.border))
                         .show(ui, |ui| {
-                            // Handle drag-and-drop files onto the chat window
-                            let dropped: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
-                                i.raw
-                                    .dropped_files
-                                    .iter()
-                                    .filter_map(|df| df.path.clone())
-                                    .collect()
-                            });
-                            for dpath in dropped {
-                                if let Some(tx) = WORKER_TX.get() {
-                                    let _ = tx.send(WorkerCmd::PickAndSendAttachment {
-                                        to_id: thread_id.clone(),
-                                        is_group,
-                                        images_only: false,
-                                        caption: String::new(),
-                                        preset_path: Some(dpath),
-                                        original_hd: self.send_hd_original,
-                                    });
-                                }
-                            }
-
                             let is_ime_busy = self.ime_active || self.ime_just_committed;
                             let trigger_screenshot_hotkey = ui.input(|i| {
                                 (i.modifiers.alt && i.key_pressed(Key::A))
@@ -4623,6 +4443,102 @@ impl ZaloGuiApp {
                                     let _ = tx.send(WorkerCmd::TriggerScreenshot);
                                     self.show_toast("Đang bật chế độ chụp màn hình… Kéo chuột để chọn vùng cần chụp");
                                 }
+                            }
+                            // @ popover keyboard navigation. Keys are consumed BEFORE the
+                            // TextEdit runs so ↑/↓ don't move the caret, Tab doesn't move focus,
+                            // and Enter neither sends nor inserts a newline.
+                            let mut mention_key_pick: Option<MentionCandidate> = None;
+                            let composer_has_focus = ui.ctx().memory(|m| {
+                                m.has_focus(Id::new(("chat_composer_input", &thread_id)))
+                            });
+                            // egui drops focus on Escape before this code runs, so handle it
+                            // regardless of focus and hand focus back to the composer.
+                            if !mention_candidates.is_empty()
+                                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+                            {
+                                if let Some((_, ref q)) = active_mention_info {
+                                    self.dismissed_mention_suggest_for = q.clone();
+                                }
+                                self.composer_focus_pending = true;
+                            }
+                            if gif_mode
+                                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+                            {
+                                self.gif_dismissed_for = Some(self.input_message.clone());
+                                self.composer_focus_pending = true;
+                            }
+                            // Esc leaves reply mode. The @ popover above takes Esc first, and open
+                            // modals (drawn later this frame) keep their own Esc-to-close.
+                            let modal_open = self.image_viewer.is_some()
+                                || self.reactions_dialog.is_some()
+                                || self.forward_msg.is_some()
+                                || self.settings_modal_open
+                                || self.schedule_modal_open
+                                || self.phone_modal_open
+                                || self.profile_menu_open;
+                            if self.replying_to.is_some()
+                                && !is_ime_busy
+                                && !modal_open
+                                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+                            {
+                                self.cancel_reply();
+                                self.composer_focus_pending = true;
+                            }
+                            if !mention_candidates.is_empty() && composer_has_focus && !is_ime_busy {
+                                let last = mention_candidates.len() - 1;
+                                self.composer_mention_selected = self.composer_mention_selected.min(last);
+                                let (down, up, pick) = ui.input_mut(|i| {
+                                    let down = i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+                                    let up = i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                                    let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab);
+                                    let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                                    if enter {
+                                        i.events.retain(|ev| {
+                                            !matches!(ev, egui::Event::Text(t) if t == "\n" || t == "\r" || t == "\r\n")
+                                        });
+                                    }
+                                    (down, up, tab || enter)
+                                });
+                                if down {
+                                    self.composer_mention_selected = (self.composer_mention_selected + 1).min(last);
+                                } else if up {
+                                    self.composer_mention_selected = self.composer_mention_selected.saturating_sub(1);
+                                }
+                                if pick {
+                                    mention_key_pick = mention_candidates.get(self.composer_mention_selected).cloned();
+                                }
+                            }
+                            if gif_mode && composer_has_focus && !is_ime_busy {
+                                let n = self.gif_results.len();
+                                let (left, right, up, down, enter) = ui.input_mut(|i| {
+                                    let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                                    if enter {
+                                        i.events.retain(|ev| {
+                                            !matches!(ev, egui::Event::Text(t) if t == "\n" || t == "\r" || t == "\r\n")
+                                        });
+                                    }
+                                    (
+                                        i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft),
+                                        i.consume_key(egui::Modifiers::NONE, Key::ArrowRight),
+                                        i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+                                        i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                                        enter,
+                                    )
+                                });
+                                if n > 0 {
+                                    let sel = self.gif_selected.min(n - 1);
+                                    let next = gif_grid_step(sel, n, left, right, up, down);
+                                    if next != sel {
+                                        self.gif_scroll_pending = true;
+                                    }
+                                    self.gif_selected = next;
+                                    if enter {
+                                        if let Some(item) = self.gif_results.get(next).cloned() {
+                                            self.send_composer_gif(&thread_id, is_group, item);
+                                        }
+                                    }
+                                }
+                                // With no results yet, Enter is swallowed so "@gif …" is never sent as text.
                             }
                             let is_cmd_enter_mode = self.settings.send_message_key == "cmd_enter";
                             let (send_via_enter, insert_newline_via_enter) = ui.input(|i| {
@@ -4915,6 +4831,26 @@ impl ZaloGuiApp {
                                                 "Nhập tin nhắn tới {}...",
                                                 truncate_chars(&thread_name, 18)
                                             );
+                                            // Paint picked @tags blue inside the composer, like sent bubbles.
+                                            let mention_names: Vec<String> = self
+                                                .composer_mentions
+                                                .iter()
+                                                .map(|p| p.name.clone())
+                                                .collect();
+                                            let composer_text_col = pal.text_primary;
+                                            let composer_tag_col =
+                                                super::messages::mention_link_color(pal);
+                                            let mut composer_layouter =
+                                                |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                                                    let mut job = composer_mention_layout_job(
+                                                        text,
+                                                        &mention_names,
+                                                        composer_text_col,
+                                                        composer_tag_col,
+                                                    );
+                                                    job.wrap.max_width = wrap_width;
+                                                    ui.fonts(|f| f.layout_job(job))
+                                                };
                                             let resp = if is_multiline {
                                                 ui.allocate_ui_with_layout(
                                                     Vec2::new(input_w, box_h),
@@ -4937,9 +4873,14 @@ impl ZaloGuiApp {
                                                                         &mut self.input_message,
                                                                     )
                                                                     .id(composer_id)
+                                                                    // Tab must pick a suggestion, not move focus (egui reads Tab
+                                                                    // at frame start, before the key is consumed above).
+                                                                    .lock_focus(!mention_candidates.is_empty())
                                                                     .desired_rows(vis_lines)
                                                                     .frame(false)
                                                                     .hint_text(hint_str)
+                                                                    .font(FontId::proportional(15.0))
+                                                                    .layouter(&mut composer_layouter)
                                                                     .margin(Margin::symmetric(
                                                                         6.0, 6.0,
                                                                     ))
@@ -4957,8 +4898,13 @@ impl ZaloGuiApp {
                                                         &mut self.input_message,
                                                     )
                                                     .id(composer_id)
+                                                    // Tab must pick a suggestion, not move focus (egui reads Tab
+                                                    // at frame start, before the key is consumed above).
+                                                    .lock_focus(!mention_candidates.is_empty())
                                                     .frame(false)
                                                     .hint_text(hint_str)
+                                                    .font(FontId::proportional(15.0))
+                                                    .layouter(&mut composer_layouter)
                                                     .margin(Margin::symmetric(6.0, 7.0))
                                                     .desired_width(input_w),
                                                 )
@@ -5027,7 +4973,8 @@ impl ZaloGuiApp {
 
                                             // Send Button
                                             let can_send = !self.input_message.trim().is_empty()
-                                                || self.pending_clipboard_image.is_some();
+                                                || self.pending_clipboard_image.is_some()
+                                                || !self.pending_drop_files.is_empty();
                                             let (send_rect, send_resp) = ui.allocate_exact_size(
                                                 Vec2::new(send_btn_w, 34.0),
                                                 Sense::click(),
@@ -5176,32 +5123,9 @@ impl ZaloGuiApp {
                                     });
 
                                     let mut chosen_mention = None;
-                                    if !mention_candidates.is_empty() && response.has_focus() {
-                                        let len = mention_candidates.len();
-                                        if self.composer_mention_selected >= len {
-                                            self.composer_mention_selected = 0;
-                                        }
-                                        if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
-                                            self.composer_mention_selected =
-                                                (self.composer_mention_selected + len - 1) % len;
-                                        } else if ui.input(|i| i.key_pressed(Key::ArrowDown)) {
-                                            self.composer_mention_selected =
-                                                (self.composer_mention_selected + 1) % len;
-                                        } else if ui.input(|i| i.key_pressed(Key::Escape)) {
-                                            if let Some((_, ref q)) = active_mention_info {
-                                                self.dismissed_mention_suggest_for = q.clone();
-                                            }
-                                        } else if ui.input(|i| i.key_pressed(Key::Tab))
-                                            || (send_via_enter
-                                                && !is_ime_busy
-                                                && (response.has_focus() || response.lost_focus()))
-                                        {
-                                            if let Some(cand) =
-                                                mention_candidates.get(self.composer_mention_selected)
-                                            {
-                                                chosen_mention = Some(cand.name.clone());
-                                            }
-                                        }
+                                    if !mention_candidates.is_empty() {
+                                        // Keys were consumed before the TextEdit (see above).
+                                        chosen_mention = mention_key_pick.take();
                                     } else if !contextual_stickers.is_empty() && response.has_focus() {
                                         let len = contextual_stickers.len();
                                         if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
@@ -5221,13 +5145,22 @@ impl ZaloGuiApp {
                                         self.composer_sticker_selected = None;
                                     }
 
-                                    if let Some(ref m_name) = chosen_mention {
+                                    if let Some(ref cand) = chosen_mention {
                                         if let Some((at_pos, _)) = active_mention_info {
-                                            let prefix = &self.input_message[..at_pos];
-                                            self.input_message = format!("{}@{} ", prefix, m_name);
-                                            self.composer_mention_selected = 0;
-                                            self.dismissed_mention_suggest_for.clear();
+                                            self.insert_composer_mention(at_pos, cand);
                                             response.request_focus();
+                                            // Put the caret after the inserted tag.
+                                            if let Some(mut st) =
+                                                egui::TextEdit::load_state(ui.ctx(), composer_id)
+                                            {
+                                                let end = egui::text::CCursor::new(
+                                                    self.input_message.chars().count(),
+                                                );
+                                                st.cursor.set_char_range(Some(
+                                                    egui::text::CCursorRange::one(end),
+                                                ));
+                                                st.store(ui.ctx(), composer_id);
+                                            }
                                         }
                                     }
 
@@ -5249,7 +5182,8 @@ impl ZaloGuiApp {
                                         }
                                     }
                                     let can_send = !self.input_message.trim().is_empty()
-                                        || self.pending_clipboard_image.is_some();
+                                        || self.pending_clipboard_image.is_some()
+                                                || !self.pending_drop_files.is_empty();
 
                                     if let Some(chosen) = send_selected_sticker {
                                         self.input_message.clear();
@@ -5266,23 +5200,33 @@ impl ZaloGuiApp {
                                             });
                                         }
                                     } else if (send_clicked || enter_pressed)
-                                        && self.pending_clipboard_image.is_some()
+                                        && (self.pending_clipboard_image.is_some()
+                                            || !self.pending_drop_files.is_empty())
                                     {
+                                        // Pasted image first, then dropped files; the typed text is
+                                        // the caption of the first one only.
+                                        let mut outgoing: Vec<(std::path::PathBuf, bool)> = Vec::new();
                                         if let Some((clip_path, _, _, _)) =
                                             self.pending_clipboard_image.take()
                                         {
-                                            let cap = self.input_message.trim().to_string();
-                                            self.input_message.clear();
-                                            self.dismissed_sticker_suggest_for.clear();
-                                            self.composer_sticker_selected = None;
-                                            response.request_focus();
-                                            if let Some(tx) = WORKER_TX.get() {
+                                            outgoing.push((clip_path, true));
+                                        }
+                                        outgoing.extend(
+                                            self.pending_drop_files.drain(..).map(|f| (f.path, false)),
+                                        );
+                                        let mut cap = self.input_message.trim().to_string();
+                                        self.input_message.clear();
+                                        self.dismissed_sticker_suggest_for.clear();
+                                        self.composer_sticker_selected = None;
+                                        response.request_focus();
+                                        if let Some(tx) = WORKER_TX.get() {
+                                            for (path, images_only) in outgoing {
                                                 let _ = tx.send(WorkerCmd::PickAndSendAttachment {
                                                     to_id: thread_id.clone(),
                                                     is_group,
-                                                    images_only: true,
-                                                    caption: cap,
-                                                    preset_path: Some(clip_path),
+                                                    images_only,
+                                                    caption: std::mem::take(&mut cap),
+                                                    preset_path: Some(path),
                                                     original_hd: self.send_hd_original,
                                                 });
                                             }
@@ -5294,6 +5238,7 @@ impl ZaloGuiApp {
                                         self.composer_sticker_selected = None;
                                         response.request_focus();
                                         let quoted = self.replying_to.take();
+                                        self.reply_auto_mention = None;
                                         if let Some(tx) = WORKER_TX.get() {
                                             if let Some(quoted) = quoted {
                                                 let _ = tx.send(WorkerCmd::SendQuote {
@@ -5301,12 +5246,22 @@ impl ZaloGuiApp {
                                                     text,
                                                     quoted,
                                                     is_group,
+                                                    mentions: if is_group {
+                                                        std::mem::take(&mut self.composer_mentions)
+                                                    } else {
+                                                        Vec::new()
+                                                    },
                                                 });
                                             } else {
                                                 let _ = tx.send(WorkerCmd::SendMessage {
                                                     to_id: thread_id.clone(),
                                                     text,
                                                     is_group,
+                                                    mentions: if is_group {
+                                                        std::mem::take(&mut self.composer_mentions)
+                                                    } else {
+                                                        Vec::new()
+                                                    },
                                                 });
                                             }
                                         }
@@ -5316,7 +5271,46 @@ impl ZaloGuiApp {
                                 });
                         });
 
+                    // 4b. OS file drag & drop: the message area sends at once ("Gửi nhanh"),
+                    // the composer zone attaches for review ("Xem trước khi gửi").
+                    let drag_hover = ctx.input(|i| !i.raw.hovered_files.is_empty());
+                    let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+                        i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
+                    });
+                    if !posting_restricted && (drag_hover || !dropped.is_empty()) {
+                        let (quick_rect, preview_rect) = drop_zone_rects(
+                            chat_scroll_out.inner_rect,
+                            composer_frame.response.rect,
+                        );
+                        let zone = drag_cursor_pos(ctx)
+                            .map(|p| drop_zone_at(p, quick_rect))
+                            .or(self.drop_zone_last)
+                            .unwrap_or(DropZone::Preview);
+                        if drag_hover {
+                            self.drop_zone_last = Some(zone);
+                            paint_drop_zones(ctx, quick_rect, preview_rect, zone, pal);
+                            // No input events arrive during an OS drag; keep the highlight live.
+                            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                        }
+                        if !dropped.is_empty() {
+                            self.drop_zone_last = None;
+                            self.handle_dropped_files(ctx, &thread_id, is_group, dropped, zone);
+                        }
+                    } else {
+                        self.drop_zone_last = None;
+                    }
+
                     // 4a. Floating Mention Suggestion Popover (`egui::Area`, rendered AFTER composer bar)
+                    if gif_mode {
+                        if let Some(item) = self.render_gif_popover(
+                            ctx,
+                            composer_frame.response.rect,
+                            gif_query.as_deref().unwrap_or(""),
+                            pal,
+                        ) {
+                            self.send_composer_gif(&thread_id, is_group, item);
+                        }
+                    }
                     let mut click_chosen_mention = None;
                     if !mention_candidates.is_empty() {
                         if let Some(chosen) = self.render_mention_suggestion_popover(
@@ -5351,13 +5345,17 @@ impl ZaloGuiApp {
                             );
                         }
                     }
-                    if let Some(mention_name) = click_chosen_mention {
+                    if let Some(cand) = click_chosen_mention {
                         if let Some((at_pos, _)) = active_mention_info {
-                            let prefix = &self.input_message[..at_pos];
-                            self.input_message = format!("{}@{} ", prefix, mention_name);
-                            self.composer_mention_selected = 0;
-                            self.dismissed_mention_suggest_for.clear();
+                            self.insert_composer_mention(at_pos, &cand);
                             self.composer_focus_pending = true;
+                            let composer_id = Id::new(("chat_composer_input", &thread_id));
+                            if let Some(mut st) = egui::TextEdit::load_state(ctx, composer_id) {
+                                let end = egui::text::CCursor::new(self.input_message.chars().count());
+                                st.cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                                st.store(ctx, composer_id);
+                            }
                         }
                     }
                     }
@@ -5402,7 +5400,6 @@ fn render_quote_target(ui: &egui::Ui, rect: egui::Rect, scroll_pending: bool, co
 
 #[derive(Debug, Clone)]
 pub(crate) struct MentionCandidate {
-    #[allow(dead_code)]
     pub id: String,
     pub name: String,
     pub avatar: Option<String>,
@@ -5424,13 +5421,923 @@ pub(crate) fn extract_active_mention_query(text: &str) -> Option<(usize, &str)> 
     if after.contains('\n') || after.contains('\r') || after.contains(';') {
         return None;
     }
-    if after.split_whitespace().count() > 3 {
+    // Vietnamese full names often have 4-5 words ("Nguyễn Hoàng Hải Đăng"); stop suggesting
+    // only once the text after `@` clearly turned into a sentence.
+    if after.split_whitespace().count() > MENTION_QUERY_MAX_WORDS {
         return None;
     }
     Some((at_idx, after))
 }
 
+/// Font size of the chat composer (Zalo PC uses 15px).
+const COMPOSER_FONT_SIZE: f32 = 15.0;
+
+/// Byte ranges of `@Name` tags in the composer text for the picked mention names.
+/// Longest names win, a tag must start at the beginning or after whitespace/opening
+/// punctuation (same rule as `extract_active_mention_query`), and spans never overlap.
+pub(crate) fn composer_mention_spans(text: &str, names: &[String]) -> Vec<std::ops::Range<usize>> {
+    let mut sorted: Vec<&String> = names.iter().filter(|n| !n.is_empty()).collect();
+    sorted.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    for name in sorted {
+        let needle = format!("@{name}");
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(&needle) {
+            let start = from + rel;
+            let end = start + needle.len();
+            from = end;
+            let boundary_ok = text[..start].chars().next_back().map_or(true, |c| {
+                c.is_whitespace() || matches!(c, '(' | '[' | '{' | '"' | '\'' | '<' | '`')
+            });
+            if boundary_ok && !spans.iter().any(|r| r.start < end && start < r.end) {
+                spans.push(start..end);
+            }
+        }
+    }
+    spans.sort_by_key(|r| r.start);
+    spans
+}
+
+/// Layout job for the composer: plain text with picked `@Name` tags in the mention colour.
+fn composer_mention_layout_job(
+    text: &str,
+    names: &[String],
+    text_col: Color32,
+    tag_col: Color32,
+) -> egui::text::LayoutJob {
+    let font = FontId::proportional(COMPOSER_FONT_SIZE);
+    let plain = egui::TextFormat::simple(font.clone(), text_col);
+    let tag = egui::TextFormat::simple(font, tag_col);
+    let mut job = egui::text::LayoutJob::default();
+    let mut cursor = 0;
+    for span in composer_mention_spans(text, names) {
+        if span.start > cursor {
+            job.append(&text[cursor..span.start], 0.0, plain.clone());
+        }
+        job.append(&text[span.clone()], 0.0, tag.clone());
+        cursor = span.end;
+    }
+    if cursor < text.len() || text.is_empty() {
+        job.append(&text[cursor..], 0.0, plain);
+    }
+    job
+}
+
+/// Maximum words after `@` that are still treated as a name query.
+const MENTION_QUERY_MAX_WORDS: usize = 6;
+
+/// Case- and diacritic-insensitive "name contains query" test for the @ popover.
+pub(crate) fn mention_name_matches(name: &str, q_trim: &str, q_fold: &str) -> bool {
+    q_trim.is_empty()
+        || name.to_lowercase().contains(&q_trim.to_lowercase())
+        || crate::chat::strip_vn_for_sticker_kw(name).contains(q_fold)
+}
+
+/// Group members reconstructed from senders seen in the loaded messages, newest first.
+/// Used when the member list has not loaded (or failed), so @ still offers real people.
+pub(crate) fn mention_fallback_from_messages(
+    messages: &[ChatMessage],
+) -> Vec<crate::chat::SidebarMember> {
+    let mut out: Vec<crate::chat::SidebarMember> = Vec::new();
+    for m in messages.iter().rev() {
+        if m.is_outgoing {
+            continue;
+        }
+        let uid = ["uidFrom", "fromUid"]
+            .iter()
+            .find_map(|k| {
+                m.wire_ref
+                    .fields
+                    .get(*k)
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or("")
+            .trim();
+        let name = m.sender.trim();
+        if uid.is_empty()
+            || uid == "0"
+            || !uid.bytes().all(|b| b.is_ascii_digit())
+            || name.is_empty()
+            || name.chars().all(|c| c.is_ascii_digit())
+            || out.iter().any(|x| x.id == uid)
+        {
+            continue;
+        }
+        out.push(crate::chat::SidebarMember {
+            id: uid.to_string(),
+            name: name.to_string(),
+            avatar: None,
+            role: "member".to_string(),
+        });
+        if out.len() >= 50 {
+            break;
+        }
+    }
+    out
+}
+
+/// Columns in the `@gif` picker grid.
+const GIF_GRID_COLS: usize = 4;
+/// Wait after the last keystroke before searching GIFs.
+const GIF_SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(350);
+
+/// Keyword of a composer `@gif` command: `Some("")` for a bare `@gif` (trending),
+/// `Some("mèo")` for `@gif mèo`, `None` when the text is not a GIF command.
+pub(crate) fn gif_command_query(text: &str) -> Option<&str> {
+    let t = text.trim_start();
+    let head = t.get(..4)?;
+    if !head.eq_ignore_ascii_case("@gif") {
+        return None;
+    }
+    let rest = &t[4..];
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    if rest.contains('\n') {
+        return None;
+    }
+    Some(rest.trim())
+}
+
+/// Move the selection in a row-major grid of `n` cells with `GIF_GRID_COLS` columns.
+pub(crate) fn gif_grid_step(
+    sel: usize,
+    n: usize,
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let mut s = sel.min(n - 1);
+    if left {
+        s = s.saturating_sub(1);
+    }
+    if right {
+        s = (s + 1).min(n - 1);
+    }
+    if up {
+        s = s.saturating_sub(GIF_GRID_COLS);
+    }
+    if down && s + GIF_GRID_COLS < n {
+        s += GIF_GRID_COLS;
+    }
+    s
+}
+
 impl ZaloGuiApp {
+    /// Debounced GIF search for the `@gif` command; resets when the command is gone.
+    fn update_gif_search(&mut self, ctx: &egui::Context, active: bool, query: Option<&str>) {
+        let Some(q) = query else {
+            if self.gif_query_sent.is_some() || self.gif_dismissed_for.is_some() {
+                self.gif_query_sent = None;
+                self.gif_query_seen.clear();
+                self.gif_results.clear();
+                self.gif_loading = false;
+                self.gif_error = None;
+                self.gif_dismissed_for = None;
+            }
+            return;
+        };
+        if !active {
+            return;
+        }
+        if q != self.gif_query_seen {
+            self.gif_query_seen = q.to_string();
+            self.gif_query_changed_at = std::time::Instant::now();
+        }
+        if self.gif_query_sent.as_deref() == Some(q) {
+            return;
+        }
+        // The first query (usually the bare `@gif` → trending) goes out at once.
+        let waited = self.gif_query_changed_at.elapsed();
+        if self.gif_query_sent.is_some() && waited < GIF_SEARCH_DEBOUNCE {
+            ctx.request_repaint_after(GIF_SEARCH_DEBOUNCE - waited);
+            return;
+        }
+        self.gif_seq += 1;
+        self.gif_loading = true;
+        self.gif_error = None;
+        self.gif_query_sent = Some(q.to_string());
+        if let Some(tx) = WORKER_TX.get() {
+            let _ = tx.send(WorkerCmd::SearchGifs {
+                query: q.to_string(),
+                seq: self.gif_seq,
+            });
+        }
+    }
+
+    /// Send a GIF picked from the `@gif` popover and leave GIF mode.
+    fn send_composer_gif(&mut self, thread_id: &str, is_group: bool, item: crate::chat::GifItem) {
+        if let Some(tx) = WORKER_TX.get() {
+            let _ = tx.send(WorkerCmd::SendGif {
+                to_id: thread_id.to_string(),
+                is_group,
+                item,
+                src: crate::chat::GIF_SRC_COMPOSER_COMMAND,
+            });
+        }
+        self.input_message.clear();
+        self.gif_results.clear();
+        self.gif_query_sent = None;
+        self.gif_query_seen.clear();
+        self.gif_selected = 0;
+        self.composer_focus_pending = true;
+    }
+
+    /// Grid of GIF results above the composer. Returns the GIF clicked this frame.
+    fn render_gif_popover(
+        &mut self,
+        ctx: &egui::Context,
+        composer_rect: Rect,
+        query: &str,
+        pal: &ThemePalette,
+    ) -> Option<crate::chat::GifItem> {
+        const GAP: f32 = 6.0;
+        let width = composer_rect.width().min(560.0) - 16.0;
+        let mut picked = None;
+        let header = if query.is_empty() {
+            "GIF xu hướng".to_string()
+        } else {
+            format!("GIF cho “{query}”")
+        };
+        egui::Area::new(Id::new("composer_gif_popover"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(Pos2::new(
+                composer_rect.left() + 8.0,
+                composer_rect.top() - 6.0,
+            ))
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(pal.bg_elevated)
+                    .stroke(Stroke::new(1.0_f32, pal.border))
+                    .rounding(Rounding::same(8.0))
+                    .shadow(egui::epaint::Shadow {
+                        offset: Vec2::new(0.0, 4.0),
+                        blur: 16.0,
+                        spread: 0.0,
+                        color: Color32::from_black_alpha(if pal.is_dark { 110 } else { 36 }),
+                    })
+                    .inner_margin(Margin::same(8.0))
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        ui.horizontal(|ui| {
+                            egui::Frame::none()
+                                .fill(pal.primary)
+                                .rounding(Rounding::same(4.0))
+                                .inner_margin(Margin::symmetric(5.0, 1.0))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("GIF")
+                                            .size(11.0)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    );
+                                });
+                            ui.label(RichText::new(header).size(13.0).color(pal.text_primary));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new("↑↓←→ chọn · Enter gửi · Esc đóng")
+                                        .size(11.0)
+                                        .color(pal.text_muted),
+                                );
+                            });
+                        });
+                        ui.add_space(6.0);
+                        if self.gif_results.is_empty() {
+                            let msg = if self.gif_loading {
+                                "Đang tìm GIF…".to_string()
+                            } else if self.gif_error.is_some() {
+                                "Không tải được GIF, thử lại sau".to_string()
+                            } else {
+                                "Không tìm thấy GIF phù hợp".to_string()
+                            };
+                            ui.add_space(18.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(RichText::new(msg).size(13.0).color(pal.text_secondary));
+                            });
+                            ui.add_space(18.0);
+                            return;
+                        }
+                        let cols = GIF_GRID_COLS as f32;
+                        let cell_w = (width - GAP * (cols - 1.0)) / cols;
+                        let cell = Vec2::new(cell_w, cell_w * 0.75);
+                        let scroll_pending = std::mem::take(&mut self.gif_scroll_pending);
+                        egui::ScrollArea::vertical()
+                            .id_salt("composer_gif_grid")
+                            .max_height(cell.y * 2.6 + GAP * 2.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = Vec2::splat(GAP);
+                                for (row_idx, row) in
+                                    self.gif_results.chunks(GIF_GRID_COLS).enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        for (col, item) in row.iter().enumerate() {
+                                            let idx = row_idx * GIF_GRID_COLS + col;
+                                            let (rect, resp) =
+                                                ui.allocate_exact_size(cell, Sense::click());
+                                            let painter = ui.painter();
+                                            painter.rect_filled(
+                                                rect,
+                                                Rounding::same(6.0),
+                                                pal.bg_input,
+                                            );
+                                            let key = format!(
+                                                "thumb_{}",
+                                                crate::crypto::md5_hex(&item.thumb)
+                                            );
+                                            match self.sticker_textures.get(&key) {
+                                                Some(tex) => {
+                                                    let sz = tex.size_vec2();
+                                                    let scale = (rect.width() / sz.x)
+                                                        .min(rect.height() / sz.y);
+                                                    let img = Rect::from_center_size(
+                                                        rect.center(),
+                                                        sz * scale,
+                                                    );
+                                                    painter.image(
+                                                        tex.id(),
+                                                        img,
+                                                        Rect::from_min_max(
+                                                            Pos2::ZERO,
+                                                            Pos2::new(1.0, 1.0),
+                                                        ),
+                                                        Color32::WHITE,
+                                                    );
+                                                }
+                                                None => {
+                                                    if self.loading_stickers.insert(key.clone()) {
+                                                        if let Some(tx) = WORKER_TX.get() {
+                                                            let _ = tx.send(
+                                                                WorkerCmd::FetchStickerImage {
+                                                                    key,
+                                                                    url: item.thumb.clone(),
+                                                                },
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            let selected = idx == self.gif_selected;
+                                            if selected || resp.hovered() {
+                                                painter.rect_stroke(
+                                                    rect,
+                                                    Rounding::same(6.0),
+                                                    Stroke::new(2.0_f32, pal.primary),
+                                                );
+                                            }
+                                            if selected && scroll_pending {
+                                                ui.scroll_to_rect(rect, None);
+                                            }
+                                            if resp
+                                                .on_hover_cursor(CursorIcon::PointingHand)
+                                                .clicked()
+                                            {
+                                                picked = Some(item.clone());
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                    });
+            });
+        picked
+    }
+}
+
+/// Where an OS file drag is released over the chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DropZone {
+    /// Message area: send every file immediately.
+    QuickSend,
+    /// Composer: attach to the draft and send together with the typed caption.
+    Preview,
+}
+
+/// A dropped file waiting in the composer preview strip.
+pub(super) struct PendingDropFile {
+    pub(super) path: std::path::PathBuf,
+    name: String,
+    is_image: bool,
+    /// Filled in from the background `DropThumb` result.
+    size: Option<u64>,
+    thumb: Option<TextureHandle>,
+    loaded: bool,
+}
+
+/// Background result for one pending dropped file.
+pub(super) struct DropThumb {
+    path: std::path::PathBuf,
+    size: Option<u64>,
+    image: Option<egui::ColorImage>,
+}
+
+/// Height reserved above the composer for the pending-files strip.
+const PENDING_DROP_STRIP_H: f32 = 96.0;
+/// Most files kept in the preview strip at once.
+const MAX_PENDING_DROP_FILES: usize = 30;
+/// Largest image decoded for a preview thumbnail.
+const MAX_DROP_THUMB_BYTES: u64 = 40 * 1024 * 1024;
+
+fn is_previewable_image(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Split the chat column into the "Gửi nhanh" zone (message area) and the "Xem trước khi gửi"
+/// zone (composer, at least 96 px tall so it stays an easy target).
+pub(super) fn drop_zone_rects(messages: Rect, composer: Rect) -> (Rect, Rect) {
+    const GAP: f32 = 6.0;
+    let left = composer.left() + GAP;
+    let right = composer.right() - GAP;
+    let preview_top = (composer.bottom() - composer.height().max(96.0)).max(messages.top() + 120.0);
+    let preview = Rect::from_min_max(
+        Pos2::new(left, preview_top + GAP),
+        Pos2::new(right, composer.bottom() - GAP),
+    );
+    let quick = Rect::from_min_max(
+        Pos2::new(left, messages.top() + GAP),
+        Pos2::new(right, preview.top() - 2.0 * GAP),
+    );
+    (quick, preview)
+}
+
+/// Releasing over the message area sends at once; anywhere else attaches for review, so an
+/// imprecise drop never sends something unexpectedly.
+pub(super) fn drop_zone_at(pointer: Pos2, quick: Rect) -> DropZone {
+    if quick.contains(pointer) {
+        DropZone::QuickSend
+    } else {
+        DropZone::Preview
+    }
+}
+
+/// Cursor position during an OS drag (see `macos_drag` for why egui's pointer is not enough).
+fn drag_cursor_pos(ctx: &egui::Context) -> Option<Pos2> {
+    #[cfg(target_os = "macos")]
+    {
+        super::macos_drag::cursor_in_window(ctx)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ctx.input(|i| i.pointer.latest_pos())
+    }
+}
+
+fn paint_dashed_rect(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let pts = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    painter.extend(egui::Shape::dashed_line(&pts, stroke, 6.0, 4.0));
+}
+
+/// Zalo-style drop targets over the chat column; the zone under the cursor is highlighted.
+fn paint_drop_zones(
+    ctx: &egui::Context,
+    quick: Rect,
+    preview: Rect,
+    active: DropZone,
+    pal: &ThemePalette,
+) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        Id::new("chat_drop_zones"),
+    ));
+    let zones = [
+        (
+            quick,
+            DropZone::QuickSend,
+            "Gửi nhanh",
+            "Thả File hoặc Ảnh vào đây để gửi nhanh",
+        ),
+        (
+            preview,
+            DropZone::Preview,
+            "Xem trước khi gửi",
+            "Thả File hoặc Ảnh vào đây để xem lại trước khi gửi",
+        ),
+    ];
+    for (rect, zone, title, hint) in zones {
+        if rect.height() < 24.0 {
+            continue;
+        }
+        let is_active = zone == active;
+        // Cover the content underneath so the labels stay readable.
+        painter.rect_filled(
+            rect,
+            Rounding::same(8.0),
+            pal.bg_chat_canvas.gamma_multiply(0.92),
+        );
+        if is_active {
+            painter.rect_filled(rect, Rounding::same(8.0), pal.primary.gamma_multiply(0.16));
+        }
+        let border = if is_active {
+            Stroke::new(2.0_f32, pal.primary)
+        } else {
+            Stroke::new(1.5_f32, pal.text_muted)
+        };
+        paint_dashed_rect(&painter, rect, border);
+        let title_size = if rect.height() > 140.0 { 22.0 } else { 18.0 };
+        let gap = 4.0;
+        let c = rect.center();
+        painter.text(
+            Pos2::new(c.x, c.y - gap),
+            egui::Align2::CENTER_BOTTOM,
+            title,
+            FontId::proportional(title_size),
+            if is_active {
+                pal.primary
+            } else {
+                pal.text_primary
+            },
+        );
+        painter.text(
+            Pos2::new(c.x, c.y + gap),
+            egui::Align2::CENTER_TOP,
+            hint,
+            FontId::proportional(14.0),
+            pal.text_secondary,
+        );
+    }
+}
+
+impl ZaloGuiApp {
+    /// Route files released over the chat: send now, or attach to the composer for review.
+    fn handle_dropped_files(
+        &mut self,
+        ctx: &egui::Context,
+        thread_id: &str,
+        is_group: bool,
+        dropped: Vec<std::path::PathBuf>,
+        zone: DropZone,
+    ) {
+        let (files, dirs): (Vec<_>, Vec<_>) = dropped.into_iter().partition(|p| !p.is_dir());
+        if !dirs.is_empty() {
+            self.show_toast("Không hỗ trợ gửi thư mục, hãy chọn từng tệp");
+        }
+        if files.is_empty() {
+            return;
+        }
+        match zone {
+            DropZone::QuickSend => {
+                let n = files.len();
+                if let Some(tx) = WORKER_TX.get() {
+                    for path in files {
+                        let _ = tx.send(WorkerCmd::PickAndSendAttachment {
+                            to_id: thread_id.to_string(),
+                            is_group,
+                            images_only: false,
+                            caption: String::new(),
+                            preset_path: Some(path),
+                            original_hd: self.send_hd_original,
+                        });
+                    }
+                }
+                self.show_toast(format!("Đang gửi {n} tệp…"));
+            }
+            DropZone::Preview => {
+                let mut added = 0usize;
+                for path in files {
+                    if self.pending_drop_files.len() >= MAX_PENDING_DROP_FILES {
+                        self.show_toast(format!(
+                            "Chỉ đính kèm tối đa {MAX_PENDING_DROP_FILES} tệp mỗi lần"
+                        ));
+                        break;
+                    }
+                    if self.pending_drop_files.iter().any(|f| f.path == path) {
+                        continue;
+                    }
+                    let is_image = is_previewable_image(&path);
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "tập tin".to_string());
+                    // Size and thumbnail are read off the UI thread.
+                    let tx = self.drop_thumb_tx.clone();
+                    let repaint = ctx.clone();
+                    let job_path = path.clone();
+                    std::thread::spawn(move || {
+                        let size = std::fs::metadata(&job_path).ok().map(|m| m.len());
+                        let image = if is_image && size.is_some_and(|s| s <= MAX_DROP_THUMB_BYTES) {
+                            image::open(&job_path).ok().map(|img| {
+                                let t = img.thumbnail(112, 112).to_rgba8();
+                                egui::ColorImage::from_rgba_unmultiplied(
+                                    [t.width() as usize, t.height() as usize],
+                                    t.as_raw(),
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        let _ = tx.send(DropThumb {
+                            path: job_path,
+                            size,
+                            image,
+                        });
+                        repaint.request_repaint();
+                    });
+                    self.pending_drop_files.push(PendingDropFile {
+                        path,
+                        name,
+                        is_image,
+                        size: None,
+                        thumb: None,
+                        loaded: false,
+                    });
+                    added += 1;
+                }
+                if added > 0 {
+                    self.composer_focus_pending = true;
+                    self.show_toast(format!(
+                        "Đã đính kèm {added} tệp — nhập chú thích rồi nhấn Enter để gửi"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Preview strip for files dropped on the composer: thumbnail or file icon, name, size, ✕.
+    fn render_pending_drop_files(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        while let Ok(done) = self.drop_thumb_rx.try_recv() {
+            if let Some(f) = self
+                .pending_drop_files
+                .iter_mut()
+                .find(|f| f.path == done.path)
+            {
+                f.size = done.size;
+                f.loaded = true;
+                f.thumb = done.image.map(|img| {
+                    ui.ctx().load_texture(
+                        format!("drop_thumb_{}", f.path.display()),
+                        img,
+                        TextureOptions::LINEAR,
+                    )
+                });
+            }
+        }
+        if self.pending_drop_files.is_empty() {
+            return;
+        }
+        let mut remove: Option<usize> = None;
+        let mut clear_all = false;
+        let count = self.pending_drop_files.len();
+        egui::Frame::none()
+            .fill(pal.bg_elevated)
+            .inner_margin(Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0_f32, pal.primary.linear_multiply(0.55)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {count} tệp đính kèm — nhập chú thích rồi nhấn Enter để gửi",
+                            lucide::PAPERCLIP
+                        ))
+                        .size(12.2)
+                        .color(pal.primary)
+                        .strong(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .small_button(format!("{} Hủy tất cả", lucide::X))
+                            .on_hover_cursor(CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            clear_all = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                egui::ScrollArea::horizontal()
+                    .id_salt("pending_drop_files_strip")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (i, f) in self.pending_drop_files.iter().enumerate() {
+                                let (card, _) =
+                                    ui.allocate_exact_size(Vec2::new(210.0, 52.0), Sense::hover());
+                                let painter = ui.painter();
+                                painter.rect_filled(card, Rounding::same(6.0), pal.bg_input);
+                                let icon = Rect::from_min_size(
+                                    card.min + Vec2::new(6.0, 6.0),
+                                    Vec2::splat(40.0),
+                                );
+                                match &f.thumb {
+                                    Some(tex) => {
+                                        painter.image(
+                                            tex.id(),
+                                            icon,
+                                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                            Color32::WHITE,
+                                        );
+                                    }
+                                    None => {
+                                        painter.rect_filled(
+                                            icon,
+                                            Rounding::same(4.0),
+                                            pal.primary.gamma_multiply(0.18),
+                                        );
+                                        painter.text(
+                                            icon.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            if f.is_image {
+                                                lucide::IMAGE
+                                            } else {
+                                                lucide::FILE_TEXT
+                                            },
+                                            FontId::proportional(18.0),
+                                            pal.primary,
+                                        );
+                                    }
+                                }
+                                let text_left = icon.right() + 8.0;
+                                let text_w = card.right() - 26.0 - text_left;
+                                let mut job = egui::text::LayoutJob::single_section(
+                                    f.name.clone(),
+                                    egui::TextFormat::simple(
+                                        FontId::proportional(13.0),
+                                        pal.text_primary,
+                                    ),
+                                );
+                                job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
+                                let name = painter.layout_job(job);
+                                painter.galley(
+                                    Pos2::new(text_left, card.top() + 9.0),
+                                    name,
+                                    pal.text_primary,
+                                );
+                                let meta = match (f.size, f.loaded) {
+                                    (Some(b), _) => crate::chat::format_file_size(b),
+                                    (None, false) => "Đang đọc…".to_string(),
+                                    (None, true) => "Không đọc được tệp".to_string(),
+                                };
+                                painter.text(
+                                    Pos2::new(text_left, card.bottom() - 9.0),
+                                    egui::Align2::LEFT_BOTTOM,
+                                    meta,
+                                    FontId::proportional(11.5),
+                                    pal.text_muted,
+                                );
+                                let x_rect = Rect::from_center_size(
+                                    Pos2::new(card.right() - 13.0, card.top() + 13.0),
+                                    Vec2::splat(20.0),
+                                );
+                                let x_resp = ui
+                                    .interact(x_rect, Id::new(("drop_file_x", i)), Sense::click())
+                                    .on_hover_cursor(CursorIcon::PointingHand)
+                                    .on_hover_text("Bỏ tệp này");
+                                let painter = ui.painter();
+                                if x_resp.hovered() {
+                                    painter.circle_filled(x_rect.center(), 10.0, pal.bg_hover);
+                                }
+                                painter.text(
+                                    x_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    lucide::X,
+                                    FontId::proportional(13.0),
+                                    pal.text_secondary,
+                                );
+                                if x_resp.clicked() {
+                                    remove = Some(i);
+                                }
+                            }
+                        });
+                    });
+            });
+        if clear_all {
+            self.pending_drop_files.clear();
+        } else if let Some(i) = remove {
+            self.pending_drop_files.remove(i);
+        }
+    }
+}
+
+/// Tag for the sender of a group message being replied to: their uid and display name.
+/// `None` for our own messages or when no numeric sender id / readable name is known.
+pub(crate) fn reply_mention_for(
+    m: &ChatMessage,
+    names_by_uid: &HashMap<String, String>,
+    my_uid: &str,
+) -> Option<crate::chat::MentionPick> {
+    let sender = m.sender.trim();
+    let uid = crate::chat::sidebar_sender_id(m)
+        .or_else(|| {
+            (!sender.is_empty() && sender != "0" && sender.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| sender.to_string())
+        })
+        // Only a display name: accept it when exactly one member has that name.
+        .or_else(|| {
+            let mut hits = names_by_uid.iter().filter(|(_, n)| n.trim() == sender);
+            match (hits.next(), hits.next()) {
+                (Some((uid, _)), None) if !sender.is_empty() => Some(uid.clone()),
+                _ => None,
+            }
+        })?;
+    if uid == my_uid {
+        return None;
+    }
+    let name = names_by_uid
+        .get(&uid)
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            let s = m.sender.trim();
+            (!s.is_empty() && !s.chars().all(|c| c.is_ascii_digit())).then(|| s.to_string())
+        })?;
+    Some(crate::chat::MentionPick { uid, name })
+}
+
+impl ZaloGuiApp {
+    /// Enter reply mode for `m`. In groups the sender is prefilled as a real `@Name ` tag at the
+    /// start of the composer; the user can delete it by hand like any other tag.
+    pub(super) fn start_reply(
+        &mut self,
+        ctx: &egui::Context,
+        thread_id: &str,
+        m: ChatMessage,
+        tag: Option<crate::chat::MentionPick>,
+    ) {
+        self.remove_reply_auto_mention();
+        if let Some(pick) = tag {
+            let needle = format!("@{}", pick.name);
+            if !self.input_message.starts_with(&needle) {
+                self.input_message = format!("{needle} {}", self.input_message);
+            }
+            if !self.composer_mentions.contains(&pick) {
+                self.composer_mentions.push(pick.clone());
+            }
+            self.reply_auto_mention = Some(pick);
+            // "@Name " would otherwise re-open the @ popover for the tag we just inserted.
+            if let Some((_, q)) = extract_active_mention_query(&self.input_message) {
+                self.dismissed_mention_suggest_for = q.to_string();
+            }
+        }
+        self.replying_to = Some(m);
+        self.composer_focus_pending = true;
+        // Caret at the end, i.e. right after the tag on an empty draft.
+        let composer_id = Id::new(("chat_composer_input", thread_id));
+        if let Some(mut st) = egui::TextEdit::load_state(ctx, composer_id) {
+            let end = egui::text::CCursor::new(self.input_message.chars().count());
+            st.cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(end)));
+            st.store(ctx, composer_id);
+        }
+    }
+
+    /// Leave reply mode, dropping the auto-inserted `@Sender ` tag if it is still untouched.
+    pub(super) fn cancel_reply(&mut self) {
+        self.replying_to = None;
+        self.remove_reply_auto_mention();
+    }
+
+    fn remove_reply_auto_mention(&mut self) {
+        let Some(pick) = self.reply_auto_mention.take() else {
+            return;
+        };
+        let needle = format!("@{}", pick.name);
+        if let Some(rest) = self.input_message.strip_prefix(&format!("{needle} ")) {
+            self.input_message = rest.to_string();
+        } else if self.input_message == needle {
+            self.input_message.clear();
+        }
+        if !self.input_message.contains(&needle) {
+            self.composer_mentions.retain(|p| p != &pick);
+        }
+    }
+
+    /// Replace the active `@query` with `@Name ` and remember the pick so it is sent as a tag.
+    fn insert_composer_mention(&mut self, at_pos: usize, cand: &MentionCandidate) {
+        let Some(prefix) = self.input_message.get(..at_pos) else {
+            return;
+        };
+        self.input_message = format!("{prefix}@{} ", cand.name);
+        let pick = crate::chat::MentionPick {
+            uid: cand.id.clone(),
+            name: cand.name.clone(),
+        };
+        if !self.composer_mentions.contains(&pick) {
+            self.composer_mentions.push(pick);
+        }
+        self.composer_mention_selected = 0;
+        // The new query is "Name " and would re-open the popover (and make Enter re-insert
+        // instead of send); dismiss exactly that query.
+        self.dismissed_mention_suggest_for = format!("{} ", cand.name);
+    }
+
     pub(super) fn render_mention_suggestion_popover(
         &mut self,
         ctx: &egui::Context,
@@ -5438,7 +6345,7 @@ impl ZaloGuiApp {
         candidates: &[MentionCandidate],
         selected_idx: usize,
         pal: &ThemePalette,
-    ) -> Option<String> {
+    ) -> Option<MentionCandidate> {
         if candidates.is_empty() {
             return None;
         }
@@ -5506,15 +6413,33 @@ impl ZaloGuiApp {
                                         Sense::click(),
                                     );
 
-                                    if is_sel || row_resp.hovered() {
+                                    if is_sel {
                                         ui.painter().rect_filled(
                                             row_rect,
                                             Rounding::same(6.0),
-                                            if is_sel {
-                                                pal.bg_selected
+                                            pal.primary.linear_multiply(if pal.is_dark {
+                                                0.32
                                             } else {
-                                                pal.bg_hover
-                                            },
+                                                0.16
+                                            }),
+                                        );
+                                        let bar = Rect::from_min_size(
+                                            row_rect.left_top() + Vec2::new(0.0, 6.0),
+                                            Vec2::new(3.0, row_rect.height() - 12.0),
+                                        );
+                                        ui.painter().rect_filled(
+                                            bar,
+                                            Rounding::same(1.5),
+                                            pal.primary,
+                                        );
+                                        if !ui.clip_rect().contains_rect(row_rect) {
+                                            ui.scroll_to_rect(row_rect, None);
+                                        }
+                                    } else if row_resp.hovered() {
+                                        ui.painter().rect_filled(
+                                            row_rect,
+                                            Rounding::same(6.0),
+                                            pal.bg_hover,
                                         );
                                     }
 
@@ -5587,7 +6512,7 @@ impl ZaloGuiApp {
 
                                     if row_resp.on_hover_cursor(CursorIcon::PointingHand).clicked()
                                     {
-                                        chosen = Some(cand.name.clone());
+                                        chosen = Some(cand.clone());
                                     }
                                 }
                             });
@@ -5611,6 +6536,147 @@ impl ZaloGuiApp {
 #[cfg(test)]
 mod quote_navigation_tests {
     use super::*;
+
+    #[test]
+    fn mention_query_keeps_long_vietnamese_names() {
+        let text = "chào @Nguyễn Hoàng Hải Đăng";
+        let (pos, q) = extract_active_mention_query(text).unwrap();
+        assert_eq!(&text[pos..pos + 1], "@");
+        assert_eq!(q, "Nguyễn Hoàng Hải Đăng");
+        let q_fold = crate::chat::strip_vn_for_sticker_kw(q);
+        assert!(mention_name_matches("Nguyễn Hoàng Hải Đăng", q, &q_fold));
+        let fold2 = crate::chat::strip_vn_for_sticker_kw("hai dang");
+        assert!(mention_name_matches(
+            "Nguyễn Hoàng Hải Đăng",
+            "hai dang",
+            &fold2
+        ));
+        assert!(extract_active_mention_query("@a b c d e f g").is_none());
+        assert!(extract_active_mention_query("mail@x.vn").is_none());
+    }
+
+    #[test]
+    fn gif_command_query_detects_only_the_at_gif_command() {
+        assert_eq!(gif_command_query("@gif"), Some(""));
+        assert_eq!(gif_command_query("@GIF  mèo con "), Some("mèo con"));
+        assert_eq!(gif_command_query("  @gif hello"), Some("hello"));
+        assert_eq!(gif_command_query("@gifts"), None);
+        assert_eq!(gif_command_query("hi @gif"), None);
+        assert_eq!(gif_command_query("@gi"), None);
+        assert_eq!(gif_command_query("@gif a\nb"), None);
+    }
+
+    #[test]
+    fn gif_grid_step_moves_in_rows_of_four() {
+        // 10 cells: rows [0..4], [4..8], [8..10]
+        assert_eq!(gif_grid_step(0, 10, false, true, false, false), 1);
+        assert_eq!(gif_grid_step(0, 10, true, false, false, false), 0);
+        assert_eq!(gif_grid_step(1, 10, false, false, false, true), 5);
+        assert_eq!(gif_grid_step(5, 10, false, false, false, true), 9);
+        assert_eq!(
+            gif_grid_step(7, 10, false, false, false, true),
+            7,
+            "no cell below"
+        );
+        assert_eq!(gif_grid_step(9, 10, false, false, true, false), 5);
+        assert_eq!(gif_grid_step(9, 10, false, true, false, false), 9);
+    }
+
+    #[test]
+    fn drop_zones_split_column_and_default_to_preview() {
+        let messages = Rect::from_min_max(Pos2::new(300.0, 60.0), Pos2::new(1000.0, 700.0));
+        let composer = Rect::from_min_max(Pos2::new(300.0, 760.0), Pos2::new(1000.0, 820.0));
+        let (quick, preview) = drop_zone_rects(messages, composer);
+        // The preview zone grows to 96 px even when the composer is shorter.
+        assert!(preview.height() >= 96.0 - 12.0);
+        assert!(quick.bottom() < preview.top());
+        assert_eq!(
+            drop_zone_at(Pos2::new(600.0, 300.0), quick),
+            DropZone::QuickSend
+        );
+        assert_eq!(
+            drop_zone_at(Pos2::new(600.0, 800.0), quick),
+            DropZone::Preview
+        );
+        // Outside the chat column (e.g. the sidebar) never sends immediately.
+        assert_eq!(
+            drop_zone_at(Pos2::new(100.0, 300.0), quick),
+            DropZone::Preview
+        );
+    }
+
+    #[test]
+    fn reply_mention_uses_member_name_and_skips_self_or_unknown() {
+        let mut names = HashMap::new();
+        names.insert("111".to_string(), "Trí".to_string());
+        let mut m = ChatMessage {
+            sender: "111".into(),
+            ..Default::default()
+        };
+        let pick = reply_mention_for(&m, &names, "999").expect("tag");
+        assert_eq!((pick.uid.as_str(), pick.name.as_str()), ("111", "Trí"));
+        // Our own uid is never tagged.
+        assert!(reply_mention_for(&m, &names, "111").is_none());
+        // Unknown member and only a numeric sender: no readable name, no tag.
+        m.sender = "222".into();
+        assert!(reply_mention_for(&m, &names, "999").is_none());
+        // Display-name sender: resolved through a unique member name, else no tag.
+        m.sender = "Trí".into();
+        assert_eq!(
+            reply_mention_for(&m, &names, "999").map(|p| p.uid),
+            Some("111".into())
+        );
+        m.sender = "Sơn Hoàng".into();
+        assert!(reply_mention_for(&m, &names, "999").is_none());
+    }
+
+    #[test]
+    fn composer_mention_spans_colour_only_picked_tags() {
+        let names = vec!["Sơn Hoàng".to_string(), "Sơn".to_string()];
+        let text = "chào @Sơn Hoàng và @Sơn, mail@Sơn.vn @Khác";
+        let spans = composer_mention_spans(text, &names);
+        let got: Vec<&str> = spans.iter().map(|r| &text[r.clone()]).collect();
+        // Longest name wins; `mail@Sơn` has no word boundary; unpicked `@Khác` stays plain.
+        assert_eq!(got, vec!["@Sơn Hoàng", "@Sơn"]);
+
+        let job = composer_mention_layout_job(text, &names, Color32::WHITE, Color32::BLUE);
+        assert_eq!(job.text, text);
+        let blue: Vec<&str> = job
+            .sections
+            .iter()
+            .filter(|s| s.format.color == Color32::BLUE)
+            .map(|s| &job.text[s.byte_range.clone()])
+            .collect();
+        assert_eq!(blue, vec!["@Sơn Hoàng", "@Sơn"]);
+        assert!(composer_mention_spans("", &names).is_empty());
+    }
+
+    #[test]
+    fn mention_fallback_uses_incoming_senders_with_numeric_uid() {
+        let mut a = ChatMessage {
+            sender: "Hải Đăng".into(),
+            ..Default::default()
+        };
+        a.wire_ref
+            .fields
+            .insert("uidFrom".into(), serde_json::json!("12345"));
+        let mut dup = a.clone();
+        dup.text = "again".into();
+        let mut mine = a.clone();
+        mine.is_outgoing = true;
+        let mut no_uid = ChatMessage {
+            sender: "Ai đó".into(),
+            ..Default::default()
+        };
+        no_uid
+            .wire_ref
+            .fields
+            .insert("uidFrom".into(), serde_json::json!("0"));
+        let out = mention_fallback_from_messages(&[a, dup, mine, no_uid]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "12345");
+        assert_eq!(out[0].name, "Hải Đăng");
+    }
 
     #[test]
     fn quote_navigation_invalidates_when_thread_changes_or_highlight_expires() {

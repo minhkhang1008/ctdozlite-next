@@ -40,6 +40,15 @@ lzma-rs = "0.3.0"
 zstd = "0.14.3"
 wasmtime = { version = "50.0.1", default-features = false, features = ["runtime", "cranelift", "std", "anyhow"] }
 getrandom = { version = "0.3", features = ["std"] }
+rustybuzz = "0.20"
+memmap2 = "0.9"
+
+# macOS clipboard image paste: same versions winit 0.30 already pulls in (no new crates).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+block2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSDictionary", "NSGeometry", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.2", features = ["block2", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSScreen"] }
 
 [lib]
 name = "zalo_rust"

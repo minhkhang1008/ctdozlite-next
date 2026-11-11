@@ -11,12 +11,28 @@
 use anyhow::Result;
 use session::Session;
 pub use zalo_rust::{
-    account_manager, api_mcp, audio, call, chat, clock, crypto, data_dir, endpoints, feed, gui, history_sync,
-    logger, login, media, media_resources, message_model, param_cipher, qr, reactions, scheduler,
-    session, socket, store, tui, ui, unread, updater, voip_log,
+    account_manager, api_mcp, audio, call, chat, clock, crypto, data_dir, endpoints, feed, gui,
+    history_sync, logger, login, media, media_resources, message_model, param_cipher, qr,
+    reactions, scheduler, session, socket, store, tui, ui, unread, updater, voip_log,
 };
 
 pub const POLL_SECS: u64 = 4;
+
+/// Make the live history files belong to the session's account before anything reads them
+/// (restores the parked copy after a logout, or merges a legacy split layout once).
+fn activate_logged_in_account(s: &Session) {
+    let Some(uin) = s
+        .login
+        .as_ref()
+        .map(|l| l.uin.as_str())
+        .filter(|u| !u.is_empty())
+    else {
+        return;
+    };
+    if let Err(e) = zalo_rust::account_manager::activate_account_data(uin) {
+        eprintln!("! Không khôi phục được lịch sử tài khoản: {e}");
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -191,12 +207,14 @@ async fn main() -> Result<()> {
             ..Default::default()
         };
 
+        activate_logged_in_account(&s);
         let mut initial_threads = chat::load_threads_cache();
-        let db_to_load = if let Some(uin) = s.login.as_ref().map(|l| &l.uin).filter(|u| !u.is_empty()) {
-            store::db_path_for_account(uin)
-        } else {
-            "zalo_history.db".to_string()
-        };
+        let db_to_load =
+            if let Some(uin) = s.login.as_ref().map(|l| &l.uin).filter(|u| !u.is_empty()) {
+                store::db_path_for_account(uin)
+            } else {
+                "zalo_history.db".to_string()
+            };
         store::load_history_into_threads(
             &db_to_load,
             &mut initial_threads,
@@ -326,6 +344,7 @@ async fn main() -> Result<()> {
     }
 
     // Fetch initial threads and hydrate with local SQLite history
+    activate_logged_in_account(&s);
     let mut initial_threads = chat::load_threads_cache();
     store::load_history_into_threads("zalo_history.db", &mut initial_threads, 200);
     if s.login.is_some() && server_ok {

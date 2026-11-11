@@ -5,14 +5,22 @@ use super::*;
 pub(super) static KNOWN_THREADS: std::sync::Mutex<Vec<(String, String, bool)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// GIFs fetched per `@gif` query (the web client allows up to 50).
+const GIF_RESULT_LIMIT: u32 = 30;
+
 pub enum WorkerCmd {
     /// Read OS authorization without prompting.
     ReadNotificationAuthorization {
         request_id: u64,
     },
-    /// Request OS authorization following an explicit Settings click.
+    /// Request OS authorization (Settings click, or once at macOS startup).
     RequestNotificationAuthorization {
         request_id: u64,
+    },
+    /// Post a native OS notification for an incoming message.
+    PostNativeNotification {
+        title: String,
+        body: String,
     },
     RequestQr,
     LoginPassword {
@@ -39,12 +47,16 @@ pub enum WorkerCmd {
         to_id: String,
         text: String,
         is_group: bool,
+        /// Members tagged from the composer (group threads only; ignored for 1-1).
+        mentions: Vec<crate::chat::MentionPick>,
     },
     SendQuote {
         to_id: String,
         text: String,
         quoted: ChatMessage,
         is_group: bool,
+        /// Members tagged in the reply (group threads only; ignored for 1-1).
+        mentions: Vec<crate::chat::MentionPick>,
     },
     Forward {
         target_id: String,
@@ -75,6 +87,17 @@ pub enum WorkerCmd {
         sticker_type: u32,
         is_group: bool,
     },
+    /// GIF search for the composer `@gif` command; an empty query means trending.
+    SearchGifs {
+        query: String,
+        seq: u64,
+    },
+    SendGif {
+        to_id: String,
+        is_group: bool,
+        item: crate::chat::GifItem,
+        src: i32,
+    },
     PickAndSendAttachment {
         to_id: String,
         is_group: bool,
@@ -91,6 +114,12 @@ pub enum WorkerCmd {
     FetchStickerImage {
         key: String,
         url: String,
+    },
+    /// Rasterise a colour emoji cluster from the system emoji font. Terminal events are
+    /// `StickerImageReady` / `StickerImageFailed` with the same `key`.
+    RasterizeEmoji {
+        key: String,
+        cluster: String,
     },
     FetchStickerStore,
     FetchStickerPack {
@@ -201,19 +230,8 @@ pub enum WorkerCmd {
         is_group: bool,
         last_cli_msg_id: String,
     },
-    FetchSocialProfile {
-        target_uid: String,
-    },
     FetchGroupMembers {
         group_id: String,
-    },
-    FetchMySocialAvatars {
-        page: u32,
-        count: u32,
-    },
-    FetchTimelineFeed {
-        friend_uids: Vec<String>,
-        shared_media_by_uid: std::collections::HashMap<String, Vec<crate::feed::FeedMedia>>,
     },
     SyncPhoneMessages {
         threads: Vec<Thread>,
@@ -255,6 +273,26 @@ pub(super) fn resp_error_code(resp: &serde_json::Value) -> Option<i64> {
     resp.get("error_code")
         .and_then(serde_json::Value::as_i64)
         .filter(|c| *c != 0)
+}
+
+fn prepare_avatar_texture(image: image::DynamicImage) -> image::RgbaImage {
+    let rgba = image.to_rgba8();
+    let target_side = rgba.width().max(rgba.height()).clamp(32, 160);
+    let longest_side = rgba.width().max(rgba.height()).max(1);
+    let scale = target_side as f64 / longest_side as f64;
+    let fitted_width = ((rgba.width() as f64 * scale).round() as u32).max(1);
+    let fitted_height = ((rgba.height() as f64 * scale).round() as u32).max(1);
+    let fitted = image::imageops::resize(
+        &rgba,
+        fitted_width,
+        fitted_height,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut canvas = image::RgbaImage::new(target_side, target_side);
+    let x = (target_side - fitted.width()) / 2;
+    let y = (target_side - fitted.height()) / 2;
+    image::imageops::overlay(&mut canvas, &fitted, i64::from(x), i64::from(y));
+    canvas
 }
 
 /// Immediately decode any disk-cached sticker thumbnails (`stickers_cache/stk_{cid}_{sid}.png`)
@@ -445,6 +483,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                 thread_id: item.thread_id.clone(),
                                                 text: item.text.clone(),
                                                 msg_id,
+                                                mentions: Vec::new(),
                                             });
                                         }
                                     }
@@ -845,6 +884,19 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                 });
                             });
                         }
+                        WorkerCmd::PostNativeNotification { title, body } => {
+                            tokio::spawn(async move {
+                                // Delivery is best-effort; a failure must never disturb chat flow.
+                                if let Err(e) =
+                                    crate::native_notifications::notify(&title, &body).await
+                                {
+                                    crate::logger::log_error(
+                                        "native_notification",
+                                        &format!("not delivered: {e:?}"),
+                                    );
+                                }
+                            });
+                        }
                         WorkerCmd::PersistThreads(threads_snapshot) => {
                             tokio::task::spawn_blocking(move || {
                                 if let Ok(mut store) =
@@ -1199,7 +1251,10 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                             .as_ref()
                                                             .map(|l| l.uin.clone())
                                                             .unwrap_or_default();
-                                                        let _ = crate::account_manager::save_current_account_snapshot(&uin);
+                                                        if let Err(e) = crate::account_manager::activate_account_data(&uin) {
+                                                    crate::logger::log_error("account::activate", &e.to_string());
+                                                }
+                                                let _ = crate::account_manager::save_current_account_snapshot(&uin);
                                                         let dname = s
                                                             .login
                                                             .as_ref()
@@ -1782,6 +1837,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                                                 thread_id: t.id.clone(),
                                                                                 text: reply_text,
                                                                                 msg_id,
+                                                                                mentions: Vec::new(),
                                                                             });
                                                                         }
                                                                     }
@@ -2030,6 +2086,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             to_id,
                             text,
                             is_group,
+                            mentions,
                         } => {
                             let session_clone = session.clone();
                             let gui_tx_clone = gui_tx.clone();
@@ -2037,7 +2094,15 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             tokio::spawn(async move {
                                 let s = session_clone.lock().await.clone();
                                 let client_id = crate::chat::next_client_message_id();
-                                if let Some(found_url) = crate::chat::extract_first_url(&text) {
+                                // `sendlink` has no verified mention support, so a group text with
+                                // tags goes through `group/mention` (the URL stays plain text).
+                                let has_tags = is_group && !mentions.is_empty();
+                                let link_url = if has_tags {
+                                    None
+                                } else {
+                                    crate::chat::extract_first_url(&text)
+                                };
+                                if let Some(found_url) = link_url {
                                     let meta = crate::chat::parse_link_metadata(&s, &found_url)
                                         .await
                                         .unwrap_or_else(|_| crate::chat::LinkMetadata {
@@ -2114,7 +2179,10 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                 }
 
                                 let res = if is_group {
-                                    crate::chat::send_group_message_with_client_id(&s, &to_id, &text, client_id).await
+                                    crate::chat::send_group_mention_message_with_client_id(
+                                        &s, &to_id, &text, client_id, &mentions,
+                                    )
+                                    .await
                                 } else {
                                     crate::chat::send_message_with_client_id(&s, &to_id, &text, client_id).await
                                 };
@@ -2123,6 +2191,11 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                         let msg_id = extract_msg_id(&resp);
                                         let _ = gui_tx_clone.send(GuiEvent::MessageSent {
                                             client_message_id: client_id.to_string(),
+                                            mentions: if is_group {
+                                                crate::chat::build_mention_info(&text, &mentions)
+                                            } else {
+                                                Vec::new()
+                                            },
                                             thread_id: to_id,
                                             text,
                                             msg_id,
@@ -2163,6 +2236,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             text,
                             quoted,
                             is_group,
+                            mentions,
                         } => {
                             let session_clone = session.clone();
                             let gui_tx_clone = gui_tx.clone();
@@ -2170,17 +2244,21 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                             tokio::spawn(async move {
                                 let s = session_clone.lock().await.clone();
                                 let client_id = crate::chat::next_client_message_id();
-                                match crate::chat::send_quote_message_with_client_id(
-                                    &s, &to_id, &text, &quoted, is_group, client_id)
+                                let picks: &[crate::chat::MentionPick] =
+                                    if is_group { &mentions } else { &[] };
+                                match crate::chat::send_quote_message_with_mentions(
+                                    &s, &to_id, &text, &quoted, is_group, client_id, picks)
                                 .await
                                 {
                                     Ok(resp) => {
+                                        let mentions = crate::chat::build_mention_info(&text, picks);
                                         let _ = gui_tx_clone.send(GuiEvent::QuoteSent {
                                             client_message_id: client_id.to_string(),
                                             thread_id: to_id,
                                             text,
                                             msg_id: extract_msg_id(&resp),
                                             quoted,
+                                            mentions,
                                         });
                                     }
                                     Err(e) => {
@@ -2260,6 +2338,7 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                 thread_id: target_id.clone(),
                                                 text: clean_text.to_string(),
                                                 msg_id,
+                                                mentions: Vec::new(),
                                             });
                                         }
                                         let _ = gui_tx_clone.send(GuiEvent::ForwardFinished {
@@ -2432,6 +2511,65 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                         let _ = gui_tx_clone.send(GuiEvent::StatusUpdate(format!(
                                             "Không thể thu hồi trên máy chủ: {e}"
                                         )));
+                                    }
+                                }
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        WorkerCmd::SearchGifs { query, seq } => {
+                            let session_clone = session.clone();
+                            let gui_tx_clone = gui_tx.clone();
+                            let ctx_clone = egui_ctx.clone();
+                            tokio::spawn(async move {
+                                let s = session_clone.lock().await.clone();
+                                let res = if query.trim().is_empty() {
+                                    crate::chat::gif_trending(&s, 0, GIF_RESULT_LIMIT).await
+                                } else {
+                                    crate::chat::gif_search(&s, query.trim(), 0, GIF_RESULT_LIMIT)
+                                        .await
+                                };
+                                let (items, error) = match res {
+                                    Ok(items) => (items, None),
+                                    Err(e) => {
+                                        crate::logger::log_error("chat::gif_search", &e.to_string());
+                                        (Vec::new(), Some(e.to_string()))
+                                    }
+                                };
+                                let _ = gui_tx_clone.send(GuiEvent::GifResults { seq, items, error });
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        WorkerCmd::SendGif {
+                            to_id,
+                            is_group,
+                            item,
+                            src,
+                        } => {
+                            let session_clone = session.clone();
+                            let gui_tx_clone = gui_tx.clone();
+                            let ctx_clone = egui_ctx.clone();
+                            tokio::spawn(async move {
+                                let s = session_clone.lock().await.clone();
+                                let client_id = crate::chat::next_client_message_id();
+                                match crate::chat::send_gif_with_client_id(
+                                    &s, &to_id, is_group, &item, src, client_id,
+                                )
+                                .await
+                                {
+                                    Ok((_resp, msg)) => {
+                                        let _ = gui_tx_clone.send(GuiEvent::AttachmentSent {
+                                            thread_id: to_id,
+                                            msg,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let err_s = e.to_string();
+                                        crate::logger::log_error("chat::send_gif", &err_s);
+                                        let _ = gui_tx_clone.send(GuiEvent::SendFailed {
+                                            thread_id: to_id,
+                                            text: "[GIF]".into(),
+                                            error: format!("Lỗi gửi GIF: {err_s}"),
+                                        });
                                     }
                                 }
                                 ctx_clone.request_repaint();
@@ -2670,43 +2808,11 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                         dyn_img = dyn_img.thumbnail(720, 720);
                                     }
                                     {
-                                        let mut rgba = dyn_img.to_rgba8();
-                                        // Apply smooth anti-aliased circular alpha mask for avatar textures (`ava_*`)
-                                        if key.starts_with("ava_") {
-                                            let side = rgba.width().min(rgba.height()).clamp(32, 160);
-                                            let x0 = (rgba.width() - side) / 2;
-                                            let y0 = (rgba.height() - side) / 2;
-                                            let cropped = image::imageops::crop_imm(
-                                                &rgba, x0, y0, side, side,
-                                            )
-                                            .to_image();
-                                            rgba = if side > 128 {
-                                                image::imageops::resize(
-                                                    &cropped,
-                                                    128,
-                                                    128,
-                                                    image::imageops::FilterType::Triangle,
-                                                )
-                                            } else {
-                                                cropped
-                                            };
-                                            let w = rgba.width() as f32;
-                                            let h = rgba.height() as f32;
-                                            let cx = (w - 1.0) * 0.5;
-                                            let cy = (h - 1.0) * 0.5;
-                                            let r = w.min(h) * 0.5;
-                                            for (x, y, px) in rgba.enumerate_pixels_mut() {
-                                                let dx = x as f32 - cx;
-                                                let dy = y as f32 - cy;
-                                                let dist = (dx * dx + dy * dy).sqrt();
-                                                if dist > r {
-                                                    px[3] = 0;
-                                                } else if dist > r - 1.4 {
-                                                    let cov = ((r - dist) / 1.4).clamp(0.0, 1.0);
-                                                    px[3] = (px[3] as f32 * cov) as u8;
-                                                }
-                                            }
-                                        }
+                                        let rgba = if key.starts_with("ava_") {
+                                            prepare_avatar_texture(dyn_img)
+                                        } else {
+                                            dyn_img.to_rgba8()
+                                        };
                                         let size =
                                             [rgba.width() as usize, rgba.height() as usize];
                                         let pixels = rgba.as_flat_samples();
@@ -2722,6 +2828,28 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                     }
                                 })
                                 .await;
+                            });
+                        }
+                        WorkerCmd::RasterizeEmoji { key, cluster } => {
+                            let gui_tx_clone = gui_tx.clone();
+                            let ctx_clone = egui_ctx.clone();
+                            // Font mapping and PNG decode are blocking work (INV-3).
+                            tokio::task::spawn_blocking(move || {
+                                let event = match crate::emoji_raster::rasterize(&cluster, 96) {
+                                    Some(bmp) => {
+                                        let edge = bmp.size as usize;
+                                        GuiEvent::StickerImageReady {
+                                            key,
+                                            image: egui::ColorImage::from_rgba_unmultiplied(
+                                                [edge, edge],
+                                                &bmp.rgba,
+                                            ),
+                                        }
+                                    }
+                                    None => GuiEvent::StickerImageFailed { key },
+                                };
+                                let _ = gui_tx_clone.send(event);
+                                ctx_clone.request_repaint();
                             });
                         }
                         WorkerCmd::FetchStickerStore => {
@@ -3155,6 +3283,9 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                                     .as_ref()
                                                     .map(|l| l.uin.clone())
                                                     .unwrap_or_default();
+                                                if let Err(e) = crate::account_manager::activate_account_data(&uin) {
+                                                    crate::logger::log_error("account::activate", &e.to_string());
+                                                }
                                                 let _ = crate::account_manager::save_current_account_snapshot(&uin);
                                                 let name = s
                                                     .login
@@ -3340,20 +3471,6 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                 ctx_clone.request_repaint();
                             });
                         }
-                        WorkerCmd::FetchSocialProfile { target_uid } => {
-                            let session_clone = session.clone();
-                            let gui_tx_clone = gui_tx.clone();
-                            let ctx_clone = egui_ctx.clone();
-                            tokio::spawn(async move {
-                                let s = session_clone.lock().await.clone();
-                                let res = s
-                                    .get_friend_social_profile(&target_uid)
-                                    .await
-                                    .map_err(|e| e.to_string());
-                                let _ = gui_tx_clone.send(GuiEvent::SocialProfileLoaded(res));
-                                ctx_clone.request_repaint();
-                            });
-                        }
                         WorkerCmd::FetchGroupMembers { group_id } => {
                             let session_clone = session.clone();
                             let gui_tx_clone = gui_tx.clone();
@@ -3441,37 +3558,6 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                     group_id,
                                     members: Vec::new(),
                                 });
-                                ctx_clone.request_repaint();
-                            });
-                        }
-                        WorkerCmd::FetchMySocialAvatars { page, count } => {
-                            let session_clone = session.clone();
-                            let gui_tx_clone = gui_tx.clone();
-                            let ctx_clone = egui_ctx.clone();
-                            tokio::spawn(async move {
-                                let s = session_clone.lock().await.clone();
-                                let res = s
-                                    .get_my_social_avatar_list(page, count)
-                                    .await
-                                    .map_err(|e| e.to_string());
-                                let _ = gui_tx_clone.send(GuiEvent::SocialAvatarsLoaded(res));
-                                ctx_clone.request_repaint();
-                            });
-                        }
-                        WorkerCmd::FetchTimelineFeed {
-                            friend_uids,
-                            shared_media_by_uid,
-                        } => {
-                            let session_clone = session.clone();
-                            let gui_tx_clone = gui_tx.clone();
-                            let ctx_clone = egui_ctx.clone();
-                            tokio::spawn(async move {
-                                let s = session_clone.lock().await.clone();
-                                let res = s
-                                    .fetch_timeline_feed(&friend_uids, &shared_media_by_uid)
-                                    .await
-                                    .map_err(|e| e.to_string());
-                                let _ = gui_tx_clone.send(GuiEvent::SocialTimelineLoaded(res));
                                 ctx_clone.request_repaint();
                             });
                         }
@@ -4001,5 +4087,30 @@ pub(crate) fn capture_screen_interactive(gui_tx: crate::gui::GuiTx, ctx: egui::C
             "Đã huỷ chụp màn hình".into(),
         ));
         ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_avatar_texture;
+    use image::{DynamicImage, Rgba, RgbaImage};
+
+    #[test]
+    fn avatar_texture_center_fits_the_complete_source_image() {
+        let source = RgbaImage::from_fn(400, 100, |x, _| {
+            if x < 200 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, 0, 255, 255])
+            }
+        });
+
+        let avatar = prepare_avatar_texture(DynamicImage::ImageRgba8(source));
+
+        assert_eq!(avatar.dimensions(), (160, 160));
+        assert_eq!(avatar.get_pixel(0, 80), &Rgba([255, 0, 0, 255]));
+        assert_eq!(avatar.get_pixel(159, 80), &Rgba([0, 0, 255, 255]));
+        assert_eq!(avatar.get_pixel(80, 0).0[3], 0);
+        assert_eq!(avatar.get_pixel(80, 159).0[3], 0);
     }
 }

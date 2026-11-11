@@ -34,16 +34,14 @@ pub struct StoredThread {
 pub struct MessageStore {
     pub conn: Connection,
 }
-/// Returns the database path scoped to the active account UIN.
-/// If `uin` is provided: `accounts/<uin>_history.db`.
-/// If `uin` is empty: falls back to `zalo_history.db`.
-pub fn db_path_for_account(uin: &str) -> String {
-    if uin.is_empty() {
-        "zalo_history.db".to_string()
-    } else {
-        let _ = std::fs::create_dir_all("accounts");
-        format!("accounts/{uin}_history.db")
-    }
+/// Database of the active (logged-in) account.
+///
+/// Always the live `zalo_history.db`: `accounts/<uin>_history.db` only parks accounts that are
+/// not active (see `account_manager::activate_account_data`). Returning the parked copy here
+/// split history in two: messages were written to the live DB but read back from the stale
+/// parked copy, and phone sync wrote to the parked copy, which the next snapshot overwrote.
+pub fn db_path_for_account(_uin: &str) -> String {
+    "zalo_history.db".to_string()
 }
 
 impl MessageStore {
@@ -61,7 +59,9 @@ impl MessageStore {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| std::path::Path::new("."));
-            crate::data_dir::ensure_private_dir(parent)?;
+            if parent != std::env::temp_dir() {
+                crate::data_dir::ensure_private_dir(parent)?;
+            }
             let mut options = std::fs::OpenOptions::new();
             options.read(true).write(true).create(true);
             #[cfg(unix)]
@@ -1690,8 +1690,14 @@ mod tests {
         let path = dir.join("zalo_history.db");
         let store = MessageStore::open(path.to_str().unwrap()).unwrap();
         drop(store);
-        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

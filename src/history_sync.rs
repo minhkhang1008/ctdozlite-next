@@ -24,11 +24,11 @@ const PAUSE: Duration = Duration::from_millis(400);
 const MAX_SYNC_DOWNLOAD_BYTES: usize = 256 * 1024 * 1024;
 const MAX_DECOMPRESSED_SYNC_BYTES: usize = 512 * 1024 * 1024;
 
-async fn read_response_limited(
-    mut response: reqwest::Response,
-    limit: usize,
-) -> Result<Vec<u8>> {
-    if response.content_length().is_some_and(|size| size > limit as u64) {
+async fn read_response_limited(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > limit as u64)
+    {
         anyhow::bail!("sync response exceeds the {limit}-byte download limit");
     }
     let mut output = Vec::new();
@@ -176,7 +176,6 @@ pub fn last_mobile_sync_status() -> Option<String> {
     LAST_MOBILE_SYNC_STATUS.lock().ok().and_then(|g| g.clone())
 }
 
-
 static CURRENT_SYNC_KEYS: std::sync::Mutex<Option<(rsa::RsaPrivateKey, String)>> =
     std::sync::Mutex::new(None);
 
@@ -187,7 +186,10 @@ pub fn get_sync_keys() -> Option<(rsa::RsaPrivateKey, String)> {
 
 /// Retrieve the active RSA 2048 public key.
 pub fn get_sync_public_key() -> Option<String> {
-    CURRENT_SYNC_KEYS.lock().ok().and_then(|g| g.as_ref().map(|(_, pub_k)| pub_k.clone()))
+    CURRENT_SYNC_KEYS
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, pub_k)| pub_k.clone()))
 }
 /// Clear the active sync keys once sync is finalized.
 pub fn clear_sync_keys() {
@@ -200,9 +202,9 @@ pub fn clear_sync_keys() {
 /// (`294 bytes` -> `392 chars` Base64 starting with `MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...`),
 /// matching `sync-message-key-generator` (`main-startup.js:598226`) for `pullMobileMsg` (`cmd 12000`).
 pub fn generate_sync_public_key() -> String {
+    use base64::Engine;
     use rsa::pkcs8::EncodePublicKey;
     use rsa::{RsaPrivateKey, RsaPublicKey};
-    use base64::Engine;
 
     let mut rng = rsa::rand_core::OsRng;
     if let Ok(priv_key) = RsaPrivateKey::new(&mut rng, 2048) {
@@ -480,7 +482,9 @@ where
     let added = db_added.max(after_total.saturating_sub(before_total));
     let active_threads = threads.iter().filter(|t| !t.messages.is_empty()).count();
     let final_msg = if let Some(phone_note) = last_mobile_sync_status() {
-        format!("{phone_note} · Đã đồng bộ Cloud/Nhóm: +{added} tin nhắn ({active_threads} hội thoại)")
+        format!(
+            "{phone_note} · Đã đồng bộ Cloud/Nhóm: +{added} tin nhắn ({active_threads} hội thoại)"
+        )
     } else {
         format!("✅ Đã gửi yêu cầu tới điện thoại & đồng bộ Cloud/Nhóm: +{added} tin nhắn ({active_threads} hội thoại). Hãy mở Zalo trên điện thoại để xác nhận nếu muốn kéo tin nhắn 1-1 cũ.")
     };
@@ -495,13 +499,13 @@ pub async fn import_mobile_backup_container(
     url: &str,
     encrypted_key: &str,
 ) -> Result<usize> {
+    use crate::store::StoredMessage;
     use aes::cipher::{BlockDecryptMut, KeyIvInit};
     use base64::Engine;
     use rsa::Pkcs1v15Encrypt;
     use rusqlite::Connection;
     use serde_json::json;
     use std::collections::HashMap;
-    use crate::store::StoredMessage;
 
     if url.is_empty() {
         anyhow::bail!("empty backup url");
@@ -628,7 +632,9 @@ pub async fn import_mobile_backup_container(
     });
     let enc_params = s.encoded_params(&noise_body)?;
     let znoise_url = format!("https://zwid.api.zalo.me/api/znoise?{}", s.common_params());
-    let resp = s.post_form(&znoise_url, format!("params={enc_params}")).await?;
+    let resp = s
+        .post_form(&znoise_url, format!("params={enc_params}"))
+        .await?;
     let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
 
     let mut id_map: HashMap<String, String> = HashMap::new();
@@ -654,7 +660,11 @@ pub async fn import_mobile_backup_container(
 
     let my_uin = 435550501_i64;
     let my_uid = s.login.as_ref().map(|l| l.uin.clone()).unwrap_or_default();
-    let my_name = s.login.as_ref().map(|l| l.display_name.clone()).unwrap_or_else(|| "Tôi".into());
+    let my_name = s
+        .login
+        .as_ref()
+        .map(|l| l.display_name.clone())
+        .unwrap_or_else(|| "Tôi".into());
 
     let mut curr_offset = 0;
     let mut total_imported = 0;
@@ -702,10 +712,27 @@ pub async fn import_mobile_backup_container(
         };
 
         for r in rows.flatten() {
-            let (sender_id_num, cli_msg_id, glb_msg_id, _status, msg_type_num, ts, content_opt, bin_net_opt) = r;
+            let (
+                sender_id_num,
+                cli_msg_id,
+                glb_msg_id,
+                _status,
+                msg_type_num,
+                ts,
+                content_opt,
+                bin_net_opt,
+            ) = r;
             let is_outgoing = sender_id_num == my_uin;
-            let sender_id = if is_outgoing { my_uid.clone() } else { thread_id.clone() };
-            let sender_name = if is_outgoing { my_name.clone() } else { String::new() };
+            let sender_id = if is_outgoing {
+                my_uid.clone()
+            } else {
+                thread_id.clone()
+            };
+            let sender_name = if is_outgoing {
+                my_name.clone()
+            } else {
+                String::new()
+            };
 
             let msg_id = if glb_msg_id > 0 {
                 glb_msg_id.to_string()
@@ -812,7 +839,11 @@ pub fn generate_sync_v2_keys() -> Result<SyncV2Keys> {
         ek_priv: hex_encode(&ek_priv),
     };
     if let Ok(mut g) = CURRENT_V2_KEYS.lock() {
-        *g = Some(SyncV2KeysRaw { ik_pub, ik_priv, ek_priv });
+        *g = Some(SyncV2KeysRaw {
+            ik_pub,
+            ik_priv,
+            ek_priv,
+        });
     }
     Ok(keys)
 }
@@ -861,7 +892,13 @@ pub async fn import_sync_v2_meta(s: &Session, url: &str) -> Result<SyncV2Meta> {
     let mut session_record: Option<Vec<u8>> = None;
     let mut last: Option<crate::zproto_host::DecryptedMeta> = None;
     for chunk in crate::zproto_host::split_frames(&bytes)? {
-        let m = host.decrypt_metadata(&chunk, &keys.ik_pub, &keys.ik_priv, &keys.ek_priv, session_record.as_deref())?;
+        let m = host.decrypt_metadata(
+            &chunk,
+            &keys.ik_pub,
+            &keys.ik_priv,
+            &keys.ek_priv,
+            session_record.as_deref(),
+        )?;
         session_record = Some(m.session_record.clone());
         last = Some(m);
     }
@@ -872,7 +909,6 @@ pub async fn import_sync_v2_meta(s: &Session, url: &str) -> Result<SyncV2Meta> {
         sender_identity: m.sender_identity,
     })
 }
-
 
 fn current_v2_keys() -> Result<SyncV2KeysRaw> {
     CURRENT_V2_KEYS
@@ -946,7 +982,9 @@ fn parse_vli(buf: &[u8], mut offset: usize) -> Option<(u64, usize)> {
             return Some((result, offset));
         }
         shift += 7;
-        if shift >= 64 { return None; }
+        if shift >= 64 {
+            return None;
+        }
     }
     None
 }
@@ -975,7 +1013,9 @@ fn parse_message(buf: &[u8]) -> Option<ParsedProtoMsg> {
                 let (len, next) = parse_vli(buf, offset)?;
                 offset = next;
                 let len = len as usize;
-                if offset + len > buf.len() { return None; }
+                if offset + len > buf.len() {
+                    return None;
+                }
                 let bytes = &buf[offset..offset + len];
                 offset += len;
                 match field_num {
@@ -1006,7 +1046,9 @@ fn parse_partition(buf: &[u8]) -> Option<ParsedProtoPartition> {
                 let (len, next) = parse_vli(buf, offset)?;
                 offset = next;
                 let len = len as usize;
-                if offset + len > buf.len() { return None; }
+                if offset + len > buf.len() {
+                    return None;
+                }
                 part.id = String::from_utf8_lossy(&buf[offset..offset + len]).into_owned();
                 offset += len;
             }
@@ -1014,7 +1056,9 @@ fn parse_partition(buf: &[u8]) -> Option<ParsedProtoPartition> {
                 let (len, next) = parse_vli(buf, offset)?;
                 offset = next;
                 let len = len as usize;
-                if offset + len > buf.len() { return None; }
+                if offset + len > buf.len() {
+                    return None;
+                }
                 if let Some(m) = parse_message(&buf[offset..offset + len]) {
                     part.messages.push(m);
                 }
@@ -1044,9 +1088,7 @@ fn decompress_sync_payload_with_limit(buf: &[u8], limit: usize) -> Result<Vec<u8
     use std::io::Read;
     fn read_limited(reader: impl Read, limit: usize) -> Result<Vec<u8>> {
         let mut output = Vec::new();
-        reader
-            .take(limit as u64 + 1)
-            .read_to_end(&mut output)?;
+        reader.take(limit as u64 + 1).read_to_end(&mut output)?;
         if output.len() > limit {
             anyhow::bail!("decompression limit exceeded ({limit} bytes)");
         }
@@ -1082,7 +1124,9 @@ pub fn parse_sync_chunk(buf: &[u8]) -> Option<Vec<ParsedProtoPartition>> {
                 let (len, next) = parse_vli(buf, offset)?;
                 offset = next;
                 let len = len as usize;
-                if offset + len > buf.len() { return None; }
+                if offset + len > buf.len() {
+                    return None;
+                }
                 if let Some(p) = parse_partition(&buf[offset..offset + len]) {
                     parts.push(p);
                 }
@@ -1148,14 +1192,22 @@ pub async fn import_sync_v2_messages(s: &Session, url: &str) -> Result<usize> {
     let partitions = parse_sync_chunk(&decompressed).unwrap_or_default();
     let db_path = crate::store::db_path_for_account(&uin);
     let mut store = crate::store::MessageStore::open(&db_path)?;
-    let my_name = s.login.as_ref().map(|l| l.display_name.clone()).unwrap_or_else(|| "Tôi".into());
+    let my_name = s
+        .login
+        .as_ref()
+        .map(|l| l.display_name.clone())
+        .unwrap_or_else(|| "Tôi".into());
 
     let mut imported = 0;
     for part in partitions {
         let thread_id = part.id.clone();
         for m in part.messages {
             let is_outgoing = m.sender_id == uin;
-            let sender_name = if is_outgoing { my_name.clone() } else { String::new() };
+            let sender_name = if is_outgoing {
+                my_name.clone()
+            } else {
+                String::new()
+            };
             let msg_id = if !m.global_id.is_empty() && m.global_id != "0" {
                 m.global_id
             } else {
@@ -1165,7 +1217,11 @@ pub async fn import_sync_v2_messages(s: &Session, url: &str) -> Result<usize> {
             let sm = crate::store::StoredMessage {
                 msg_id,
                 thread_id: thread_id.clone(),
-                sender_id: if is_outgoing { uin.clone() } else { thread_id.clone() },
+                sender_id: if is_outgoing {
+                    uin.clone()
+                } else {
+                    thread_id.clone()
+                },
                 sender_name,
                 text: m.content,
                 msg_type: "webchat".into(),
@@ -1252,7 +1308,6 @@ mod tests {
         assert_eq!(raw.len(), 294);
         assert_eq!(&raw[raw.len() - 5..], &[0x02, 0x03, 0x01, 0x00, 0x01]);
     }
-
 
     #[test]
     fn extract_mobile_sync_controls_parses_v1_and_v2_events() {

@@ -30,65 +30,82 @@ pub(super) struct ThemePalette {
     pub(super) bubble_in_border: Color32,
     pub(super) bubble_in_text: Color32,
     pub(super) bubble_in_meta: Color32,
+    /// Icon colour on the left navigation rail (`--icon-navbar-normal`).
+    pub(super) nav_icon: Color32,
+    pub(super) nav_icon_active: Color32,
+    /// Tile behind the active rail item (`--layer-background-navbar-selected`).
+    pub(super) nav_selected_bg: Color32,
+    pub(super) nav_hover_bg: Color32,
 }
 
 impl ThemePalette {
     pub(super) fn dark() -> Self {
-        // Official Atom One Dark (`one-dark-ui` + `one-dark-syntax`) color system
+        // Zalo PC dark tokens, measured on chat.zalo.me (2026-11-11):
+        // nav rail `--layer-background-navbar-normal`, panels `--layer-background`,
+        // bubbles `--white-message` / `--blue-message`.
         Self {
             is_dark: true,
-            bg_app: Color32::from_rgb(24, 26, 31), // #181A1F Activity Bar & Title Bar
-            bg_sidebar: Color32::from_rgb(33, 37, 43), // #21252B Tree-View / Sidebar / Header
-            bg_chat_canvas: Color32::from_rgb(40, 44, 52), // #282C34 Atom One Dark Editor Canvas
-            bg_elevated: Color32::from_rgb(44, 49, 58), // #2C313A Elevated Card / Modal / Popover
-            bg_hover: Color32::from_rgb(50, 56, 66), // #323842 List Hover Surface
-            bg_selected: Color32::from_rgb(58, 63, 75), // #3A3F4B Active Selection Row
-            bg_input: Color32::from_rgb(29, 31, 35), // #1D1F23 Input / Search Well
-            border: Color32::from_rgb(52, 57, 66), // #343942 Subtle Panel Divider
-            text_primary: Color32::from_rgb(215, 218, 224), // #D7DAE0 Bright Foreground
-            text_secondary: Color32::from_rgb(171, 178, 191), // #ABB2BF Atom @mono-1
-            text_muted: Color32::from_rgb(118, 126, 142), // #767E8E Atom @mono-3 (readable muted)
-            primary: Color32::from_rgb(82, 139, 255), // #528BFF Atom UI Accent Blue
-            primary_hover: Color32::from_rgb(97, 175, 239), // #61AFEF Atom @hue-2 Cyan-Blue
-            accent_online: Color32::from_rgb(152, 195, 121), // #98C379 Atom @hue-4 Green
-            danger: Color32::from_rgb(224, 108, 117), // #E06C75 Atom @hue-5 Coral Red
-            warning: Color32::from_rgb(229, 192, 123), // #E5C07B Atom @hue-62 Warm Gold
-            bubble_out_bg: Color32::from_rgb(37, 55, 77), // #25374D Zalo Dark Slate-Navy Outgoing Bubble
-            bubble_out_text: Color32::from_rgb(235, 240, 246), // #EBF0F6
-            bubble_out_meta: Color32::from_rgb(154, 171, 192), // #9AABC0
-            bubble_in_bg: Color32::from_rgb(50, 56, 66),  // #323842 Atom Elevated Incoming Bubble
-            bubble_in_border: Color32::from_rgb(62, 68, 81), // #3E4451 Atom Gutter Border
-            bubble_in_text: Color32::from_rgb(215, 218, 224), // #D7DAE0
-            bubble_in_meta: Color32::from_rgb(142, 150, 165), // #8E96A5
+            bg_app: Color32::from_rgb(0x12, 0x14, 0x16), // #121416 nav rail / title bar
+            bg_sidebar: Color32::from_rgb(0x22, 0x26, 0x2B), // #22262B conversation list, header
+            bg_chat_canvas: Color32::from_rgb(0x22, 0x26, 0x2B), // #22262B message area
+            bg_elevated: Color32::from_rgb(0x28, 0x2D, 0x33), // #282D33 cards, popovers
+            bg_hover: Color32::from_rgb(0x2D, 0x31, 0x36), // white 5% over #22262B
+            bg_selected: Color32::from_rgb(0x1F, 0x34, 0x4D), // #1F344D selected row
+            bg_input: Color32::from_rgb(0x16, 0x19, 0x1D), // #16191D search / input well
+            border: Color32::from_rgb(0x38, 0x3C, 0x40), // white 10% over #22262B (divider)
+            text_primary: Color32::from_rgb(0xDF, 0xE2, 0xE7), // #DFE2E7
+            text_secondary: Color32::from_rgb(0x9F, 0xAC, 0xBC), // #9FACBC
+            text_muted: Color32::from_rgb(0x73, 0x82, 0x96), // #738296 placeholder
+            primary: Color32::from_rgb(0x00, 0x68, 0xFF), // #0068FF accent blue
+            primary_hover: Color32::from_rgb(0x66, 0xA6, 0xFF), // #66A6FF selected tab / links
+            accent_online: Color32::from_rgb(0x4B, 0xC3, 0x77), // #4BC377
+            danger: Color32::from_rgb(0xE9, 0x49, 0x49), // #E94949 badge / errors
+            warning: Color32::from_rgb(0xFF, 0xCD, 0x29), // #FFCD29
+            bubble_out_bg: Color32::from_rgb(0x1F, 0x34, 0x4D), // #1F344D
+            bubble_out_text: Color32::from_rgb(0xDF, 0xE2, 0xE7),
+            bubble_out_meta: Color32::from_rgb(0x9F, 0xAC, 0xBC),
+            bubble_in_bg: Color32::from_rgb(0x28, 0x2D, 0x33), // #282D33
+            bubble_in_border: Color32::from_rgb(0x28, 0x2D, 0x33), // borderless, shadow only
+            bubble_in_text: Color32::from_rgb(0xDF, 0xE2, 0xE7),
+            bubble_in_meta: Color32::from_rgb(0x9F, 0xAC, 0xBC),
+            nav_icon: Color32::from_rgb(0xDF, 0xE2, 0xE7), // #DFE2E7
+            nav_icon_active: Color32::from_rgb(0xDF, 0xE2, 0xE7),
+            nav_selected_bg: Color32::from_rgba_unmultiplied(255, 255, 255, 13), // white 5%
+            nav_hover_bg: Color32::from_rgba_unmultiplied(255, 255, 255, 26),    // white 10%
         }
     }
 
     pub(super) fn light() -> Self {
+        // Zalo PC light tokens (`:root .light`), same names as the dark set.
         Self {
             is_dark: false,
-            bg_app: Color32::from_rgb(255, 255, 255), // #FFFFFF
-            bg_sidebar: Color32::from_rgb(255, 255, 255), // #FFFFFF
-            bg_chat_canvas: Color32::from_rgb(235, 240, 247), // Authentic Zalo PC cool blue-gray canvas
-            bg_elevated: Color32::from_rgb(255, 255, 255),    // #FFFFFF
-            bg_hover: Color32::from_rgb(241, 245, 249),       // #F1F5F9
-            bg_selected: Color32::from_rgb(229, 241, 255),    // #E5F1FF Zalo active row
-            bg_input: Color32::from_rgb(248, 250, 252),       // #F8FAFC
-            border: Color32::from_rgb(226, 232, 240),         // #E2E8F0
-            text_primary: Color32::from_rgb(15, 23, 42),      // #0F172A (16.1:1 contrast)
-            text_secondary: Color32::from_rgb(71, 85, 105),   // #475569 (7.2:1 contrast)
-            text_muted: Color32::from_rgb(100, 116, 139),     // #64748B (4.6:1 contrast)
-            primary: Color32::from_rgb(0, 104, 255),          // #0068FF Zalo Blue
-            primary_hover: Color32::from_rgb(37, 99, 235),    // #2563EB
-            accent_online: Color32::from_rgb(5, 150, 105),    // #059669 Emerald
-            danger: Color32::from_rgb(220, 38, 38),           // #DC2626
-            warning: Color32::from_rgb(217, 119, 6),          // #D97706
-            bubble_out_bg: Color32::from_rgb(229, 239, 255), // Zalo Desktop Light Outgoing (#E5EFFF)
-            bubble_out_text: Color32::from_rgb(15, 23, 42),  // Crisp dark text on light blue (14:1)
-            bubble_out_meta: Color32::from_rgb(71, 92, 122),
+            bg_app: Color32::from_rgb(0x00, 0x5A, 0xE0), // #005AE0 blue nav rail
+            bg_sidebar: Color32::WHITE,
+            bg_chat_canvas: Color32::from_rgb(0xE5, 0xE7, 0xEB), // #E5E7EB surface
+            bg_elevated: Color32::WHITE,
+            bg_hover: Color32::from_rgb(0xF1, 0xF2, 0xF4), // #F1F2F4
+            bg_selected: Color32::from_rgb(0xE5, 0xF1, 0xFF), // #E5F1FF
+            bg_input: Color32::from_rgb(0xF1, 0xF2, 0xF4), // #F1F2F4 filled input
+            border: Color32::from_rgb(0xD9, 0xDB, 0xDF),   // black 15% over white
+            text_primary: Color32::from_rgb(0x08, 0x1B, 0x3A), // #081B3A
+            text_secondary: Color32::from_rgb(0x5A, 0x69, 0x81), // #5A6981
+            text_muted: Color32::from_rgb(0x77, 0x85, 0x9C), // #77859C
+            primary: Color32::from_rgb(0x00, 0x68, 0xFF),  // #0068FF
+            primary_hover: Color32::from_rgb(0x00, 0x45, 0xAD), // #0045AD
+            accent_online: Color32::from_rgb(0x37, 0xB3, 0x61), // #37B361
+            danger: Color32::from_rgb(0xC3, 0x18, 0x18),   // #C31818
+            warning: Color32::from_rgb(0xE6, 0xA7, 0x00),
+            bubble_out_bg: Color32::from_rgb(0xE5, 0xF1, 0xFF), // #E5F1FF
+            bubble_out_text: Color32::from_rgb(0x08, 0x1B, 0x3A),
+            bubble_out_meta: Color32::from_rgb(0x5A, 0x69, 0x81),
             bubble_in_bg: Color32::WHITE,
-            bubble_in_border: Color32::from_rgb(216, 224, 236),
-            bubble_in_text: Color32::from_rgb(15, 23, 42),
-            bubble_in_meta: Color32::from_rgb(100, 116, 139),
+            bubble_in_border: Color32::WHITE, // borderless, shadow only
+            bubble_in_text: Color32::from_rgb(0x08, 0x1B, 0x3A),
+            bubble_in_meta: Color32::from_rgb(0x5A, 0x69, 0x81),
+            nav_icon: Color32::WHITE,
+            nav_icon_active: Color32::WHITE,
+            nav_selected_bg: Color32::from_rgba_unmultiplied(0, 0, 0, 64), // black 25%
+            nav_hover_bg: Color32::from_rgba_unmultiplied(0, 0, 0, 38),    // black 15%
         }
     }
 
@@ -110,7 +127,8 @@ impl ThemePalette {
                 .linear_multiply(if self.is_dark { 0.45 } else { 0.22 });
         visuals.selection.stroke = Stroke::new(1.5_f32, self.primary);
 
-        let r = Rounding::same(8.0);
+        // Zalo PC uses 6px corners on rows, bubbles and cards, 3-5px on small controls.
+        let r = Rounding::same(6.0);
         visuals.widgets.noninteractive.bg_fill = self.bg_app;
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.border);
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, self.text_primary);
@@ -189,6 +207,8 @@ impl ThemePalette {
             ("bubble_in_border", &mut self.bubble_in_border),
             ("bubble_in_text", &mut self.bubble_in_text),
             ("bubble_in_meta", &mut self.bubble_in_meta),
+            ("nav_icon", &mut self.nav_icon),
+            ("nav_icon_active", &mut self.nav_icon_active),
         ] {
             if let Some(hex) = sub.get(key).and_then(|v| v.as_str()) {
                 if let Some(c) = parse_hex_color(hex) {
@@ -227,6 +247,8 @@ impl ThemePalette {
                 "bubble_in_border": format_hex_color(p.bubble_in_border),
                 "bubble_in_text": format_hex_color(p.bubble_in_text),
                 "bubble_in_meta": format_hex_color(p.bubble_in_meta),
+                "nav_icon": format_hex_color(p.nav_icon),
+                "nav_icon_active": format_hex_color(p.nav_icon_active),
             })
         };
         let doc = serde_json::json!({
@@ -351,22 +373,9 @@ pub(super) fn matches_vn_query(haystack: &str, query_lower: &str, query_folded: 
     !query_folded.is_empty() && fold_vn_search(haystack).contains(query_folded)
 }
 
-fn paint_circular_image(
-    painter: &egui::Painter,
-    center: Pos2,
-    radius: f32,
-    tex: &TextureHandle,
-) {
-    let [tw, th] = tex.size();
-    let (uv_min, uv_max) = if tw == th || tw == 0 || th == 0 {
-        (Pos2::ZERO, Pos2::new(1.0, 1.0))
-    } else if tw > th {
-        let crop = (tw - th) as f32 / (2.0 * tw as f32);
-        (Pos2::new(crop, 0.0), Pos2::new(1.0 - crop, 1.0))
-    } else {
-        let crop = (th - tw) as f32 / (2.0 * th as f32);
-        (Pos2::new(0.0, crop), Pos2::new(1.0, 1.0 - crop))
-    };
+fn paint_circular_image(painter: &egui::Painter, center: Pos2, radius: f32, tex: &TextureHandle) {
+    let uv_min = Pos2::ZERO;
+    let uv_max = Pos2::new(1.0, 1.0);
 
     let mut mesh = egui::Mesh::with_texture(tex.id());
     let n_pts = 32;
@@ -501,9 +510,7 @@ pub(super) fn paint_user_avatar(
     // Vẽ avatar nhóm chuẩn đơn với màu sắc và tên viết tắt đẹp mắt, không cắt ghép chữ li ti
     let has_any_photo = slots.iter().any(|(_, u)| !u.is_empty());
     if !has_any_photo {
-        paint_single_circle_avatar(
-            painter, center, radius, name, true, None, textures, loading,
-        );
+        paint_single_circle_avatar(painter, center, radius, name, true, None, textures, loading);
         return;
     }
 
@@ -535,7 +542,11 @@ pub(super) fn paint_user_avatar(
                     sub_r,
                     m_name,
                     false,
-                    if m_url.is_empty() { None } else { Some(m_url.as_str()) },
+                    if m_url.is_empty() {
+                        None
+                    } else {
+                        Some(m_url.as_str())
+                    },
                     textures,
                     loading,
                 );
@@ -556,7 +567,11 @@ pub(super) fn paint_user_avatar(
                     sub_r,
                     m_name,
                     false,
-                    if m_url.is_empty() { None } else { Some(m_url.as_str()) },
+                    if m_url.is_empty() {
+                        None
+                    } else {
+                        Some(m_url.as_str())
+                    },
                     textures,
                     loading,
                 );
@@ -595,7 +610,11 @@ pub(super) fn paint_user_avatar(
                 sub_r,
                 m_name,
                 false,
-                if m_url.is_empty() { None } else { Some(m_url.as_str()) },
+                if m_url.is_empty() {
+                    None
+                } else {
+                    Some(m_url.as_str())
+                },
                 textures,
                 loading,
             );
@@ -610,7 +629,11 @@ pub(super) fn paint_user_avatar(
                     sub_r,
                     m_name,
                     false,
-                    if m_url.is_empty() { None } else { Some(m_url.as_str()) },
+                    if m_url.is_empty() {
+                        None
+                    } else {
+                        Some(m_url.as_str())
+                    },
                     textures,
                     loading,
                 );
@@ -748,9 +771,6 @@ pub(super) fn draw_icon_cloud(painter: &egui::Painter, center: Pos2, size: f32, 
 
 pub(super) fn draw_icon_settings(painter: &egui::Painter, center: Pos2, size: f32, color: Color32) {
     draw_lucide_icon(painter, center, lucide::SETTINGS, size, color);
-}
-pub(super) fn draw_icon_feed(painter: &egui::Painter, center: Pos2, size: f32, color: Color32) {
-    draw_lucide_icon(painter, center, lucide::NEWSPAPER, size, color);
 }
 
 pub(super) fn draw_icon_drawer(painter: &egui::Painter, center: Pos2, size: f32, color: Color32) {

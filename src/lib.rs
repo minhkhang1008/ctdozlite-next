@@ -5,6 +5,8 @@ pub mod chat;
 pub mod clock;
 pub mod crypto;
 pub mod endpoints;
+/// Colour emoji bitmaps extracted from the system emoji font (worker-side only).
+pub mod emoji_raster;
 pub mod feed;
 pub mod gui;
 pub mod history_sync;
@@ -26,16 +28,16 @@ pub mod unread;
 pub mod voip_log;
 pub mod zproto_host;
 
+/// Local HTTP REST API, MCP JSON-RPC 2.0 server, and auto-reply rules (#35).
+pub mod api_mcp;
 /// Writable storage selection and private atomic session writes.
 pub mod data_dir;
 /// Bounded media downloads, cache isolation, and resource admission.
 pub mod media_resources;
-/// Bounded release downloads and transactional installation.
-pub mod updater;
 /// Scheduled message queue backed by SQLite (#38, #24).
 pub mod scheduler;
-/// Local HTTP REST API, MCP JSON-RPC 2.0 server, and auto-reply rules (#35).
-pub mod api_mcp;
+/// Bounded release downloads and transactional installation.
+pub mod updater;
 
 /// Native notification authorization without delivery.
 pub mod native_notifications;
