@@ -49,6 +49,9 @@ class NativePackagingTests(unittest.TestCase):
                         shutil.copy2(binary, destination)
                     destination.chmod(0o755)
                     subprocess.run(["codesign", "--force", "--sign", "-", str(destination)], capture_output=True, check=True)
+                icon = app / "Contents/Helpers/DailyNotifier.app/Contents/Resources/AppIcon.icns"
+                icon.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(BUILD / "DailyNotifier.app/Contents/Resources/AppIcon.icns", icon)
                 licenses = app / "Contents/Resources/ThirdPartyLicenses"
                 licenses.mkdir()
                 shutil.copy2(BUILD / "zstd-1.5.7/arm64/source/LICENSE", licenses / "zstd-LICENSE")
