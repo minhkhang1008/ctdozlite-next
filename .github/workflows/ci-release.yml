@@ -37,7 +37,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag_name: ${{ steps.version.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -81,7 +81,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install build dependencies
@@ -106,7 +106,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install build & packaging tools
@@ -210,7 +210,7 @@ jobs:
           cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
           chmod +x "$STAGE/ctdozlite" "$STAGE/install.sh" "$STAGE/uninstall.sh"
           tar -czf "dist/${STAGE}.tar.gz" "$STAGE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ctdozlite-linux-packages
           path: dist/*
@@ -228,7 +228,7 @@ jobs:
     container:
       image: rust:bullseye
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install build dependencies & update Rust stable (Debian 11 Bullseye)
         run: |
           sed -i '/bullseye-security/d' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
@@ -274,7 +274,7 @@ jobs:
           cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
           chmod +x "$STAGE/ctdozlite" "$STAGE/install.sh" "$STAGE/uninstall.sh"
           tar -czf "dist/${STAGE}.tar.gz" "$STAGE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ctdozlite-linux-legacy
           path: dist/*
@@ -289,7 +289,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run test suite
@@ -303,7 +303,7 @@ jobs:
           Compress-Archive -Path "dist\ctdozlite-$($env:VERSION)-portable-windows-x86_64.exe","README.md","LICENSE-MIT","LICENSE-APACHE" -DestinationPath "dist\ctdozlite-$($env:VERSION)-portable-windows-x86_64.zip" -Force
           iscc "/DMyAppVersion=$($env:VERSION)" packaging\windows\installer.iss
           Move-Item dist\ctdozlite-setup-windows-x86_64.exe "dist\ctdozlite-$($env:VERSION)-setup-windows-x86_64.exe" -Force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ctdozlite-windows-exe
           path: |
@@ -325,7 +325,7 @@ jobs:
       OPUS_STATIC: "1"
       OPUS_NO_PKG: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -426,7 +426,7 @@ jobs:
           package_dmg "target/universal-apple-darwin/release/ctdozlite" "dist/ctdozlite-${VER}-macos.dmg" "ctdozlite"
           python3 tests/native_packaging.py
           ls -lh dist/*.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ctdozlite-macos-dmg
           path: dist/*.dmg
@@ -445,7 +445,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: release_assets
           merge-multiple: true
@@ -495,7 +495,7 @@ jobs:
           cat latest.json
       # Release notes = the version's CHANGELOG section, one short line per change; the in-app
       # update dialog lists these bullets. GitHub's auto commit list is off (it polluted that list).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: src_checkout
           sparse-checkout: |
@@ -508,7 +508,7 @@ jobs:
           python3 src_checkout/scripts/release_notes.py "$VERSION" src_checkout/CHANGELOG.md "${{ github.repository }}" > release_notes.md
           cat release_notes.md
       - name: Attest build provenance of the release files
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release_assets/*.dmg
@@ -519,7 +519,7 @@ jobs:
             release_assets/*.AppImage
             release_assets/*.tar.gz
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           name: ctdozlite-next ${{ needs.prepare.outputs.tag_name }}

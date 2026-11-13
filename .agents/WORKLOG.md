@@ -914,3 +914,34 @@ Entry template:
 - Changes: bumped the crate and lockfile to 0.3.0; moved the curated Unreleased notes to `2026-11-14`; prepared one integrated release snapshot because the accumulated GUI/worker/protocol changes overlap across files. User explicitly authorized commit, push and tag creation.
 - Verification: live acceptance by the owner covers the final voice/video regression. Final `cargo fmt --all -- --check`, `cargo check --all-targets --message-format=short`, full `cargo test --locked -q` (351 passed / 2 ignored plus integration 6 + 9 + 14 + 20) and `cargo build --release --locked --bin ctdozlite` passed at version 0.3.0. Release-note extraction produced the expected v0.3.0 section; `git diff --check` passed. Crate-wide strict Clippy still has the previously documented legacy lint backlog and was not weakened.
 - Status: v0.3.0 release snapshot is verified and ready for the explicitly authorized `main` push plus annotated `v0.3.0` tag; GitHub Actions will perform cross-platform packaging after the tag reaches origin.
+
+## 2026-11-14 — Fix v0.3.0 macOS packaging test and add landing page (agent: Claude Code, claude-sonnet-5-5)
+- Request: check the v0.3.0 release, then build a landing site for ctdozlite-next modelled on ctdozlite.ctdo.net but with its own design.
+- Root cause: `tests/native_packaging.py` synthetic bundle lacked `DailyNotifier.app/.../AppIcon.icns`, which `validate-native-bundle.py` requires, so the macOS job failed and "Publish GitHub Release" was skipped. Fixed the fixture, pushed `main`, force-moved tag `v0.3.0` (no release existed yet; owner approved).
+- Changes: `tests/native_packaging.py`; landing page `site/` was drafted then deleted at owner's request (never committed).
+- Verification: icon assertion gone locally; full arch matrix only runs in CI (local build is arm64-only). The CI run on the tag was still in progress.
+- Status: partial. No site remains.
+
+## 2026-11-14 — Run in background when the window is closed (agent: Claude Code, claude-sonnet-5-5)
+- Request: pressing X exited the app, so message/call notifications stopped; keep the app running.
+- Changes: new `src/gui/background.rs` (`hide_app` = macOS `NSApp hide:`, else minimise; `show_app`
+  = unhide + activate + focus). `src/gui.rs`: X button and `close_requested` now `CancelClose` +
+  hide (quit only via Ctrl+Q or updater `allow_quit`); incoming call calls `show_app`; a 500ms
+  `request_repaint_after` keeps `check_events` draining worker events while hidden.
+  `Cargo.toml`: objc2-app-kit features `NSApplication`, `NSResponder`, `NSRunningApplication`.
+- Verification: `cargo check` passes. NOT verified at runtime: that egui keeps updating while the
+  app is hidden (if notifications stop after hiding, move event draining off the UI loop), and
+  that Dock click restores the window. No tray icon / "quit" menu yet; Ctrl+Q is the only quit.
+- Status: partial, pending user test. No commit.
+
+## 2026-11-14 — Tray icon for background mode (agent: Claude Code, claude-sonnet-5-5)
+- Request: X should hide the window but leave a tray icon (Windows "^" area) with the app still receiving messages/calls; same on other OSes.
+- Changes: new `src/gui/tray.rs` (tray-icon 0.26, Windows+macOS only; menu "Mở Zalo"/"Thoát", left click restores; events set atomics consumed in `update`). `background.rs`: with tray → `Visible(false)`; `show_app` also `Visible(true)`. `gui.rs`: `_tray` field, tray show/quit handling. `Cargo.toml`/`Cargo.lock`: tray-icon dep (win/macOS only).
+- Verification: `cargo check --locked` on macOS only. NOT verified: Windows build/behaviour, that egui keeps updating while hidden on Windows, macOS menu-bar icon. Linux has no tray (needs GTK/appindicator libs) and falls back to minimise.
+- Status: partial, pending user test. No commit.
+
+## 2026-11-14 — Release v0.3.1: build warnings + background mode (agent: Claude Code, claude-sonnet-5-5)
+- Request: fix the small v0.3.0 build warnings, then publish v0.3.1 with the background-run feature.
+- Changes: removed redundant `package.homepage`; `src/chat.rs` `fetch_update` → CAS loop (`try_update` needs Rust 1.95, MSRV is 1.75); `.github/workflows/ci-release.yml` actions bumped to Node 24 lines (checkout@v5, upload-artifact@v6, download-artifact@v7, attest-build-provenance@v4, action-gh-release@v3); version 0.3.1; CHANGELOG. The "ubuntu-latest → Ubuntu 26" and "macOS arm64 queue" annotations are informational, left alone.
+- Verification: `cargo check --locked`, `cargo test --locked` (351 pass). `cargo clippy -D warnings` already fails with 121 pre-existing errors (not touched). CI action major bumps NOT verified until the tag workflow runs.
+- Status: tagged v0.3.1 and pushed (see git log).

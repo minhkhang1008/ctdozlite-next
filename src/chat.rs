@@ -1416,12 +1416,16 @@ pub(crate) fn next_client_message_id() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
-    let previous = LAST_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
-            Some(now.max(last.saturating_add(1)))
-        })
-        .unwrap_or_else(|last| last);
-    now.max(previous.saturating_add(1))
+    // CAS loop instead of `fetch_update`/`try_update`: the latter was renamed in recent Rust, and
+    // this crate still supports Rust 1.75.
+    let mut previous = LAST_ID.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(previous.saturating_add(1));
+        match LAST_ID.compare_exchange_weak(previous, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(actual) => previous = actual,
+        }
+    }
 }
 
 /// Convert inline Markdown (`**bold**`, `__underline__`, `~~strikethrough~~`, `*italic*`) and

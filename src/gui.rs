@@ -21,6 +21,8 @@ use crate::logger::{self, FindingLevel, LogEntry, ScanFinding};
 use crate::qr::QrLogin;
 use crate::session::Session;
 
+mod background;
+mod tray;
 mod doc_preview_ui;
 #[cfg(target_os = "macos")]
 mod macos_clipboard;
@@ -854,6 +856,8 @@ pub struct ZaloGuiApp {
     group_member_search: String,
     user_online_map: HashMap<String, (bool, String)>,
     allow_quit: bool,
+    /// Tray icon handle; dropping it removes the icon.
+    _tray: Option<tray::Tray>,
     settings_modal_open: bool,
     settings_tab: SettingsTab,
     notification_authorization: crate::native_notifications::AuthorizationState,
@@ -1191,6 +1195,7 @@ impl ZaloGuiApp {
             group_member_search: String::new(),
             user_online_map: HashMap::new(),
             allow_quit: false,
+            _tray: tray::Tray::new(&cc.egui_ctx),
             settings_modal_open: false,
             settings_tab: SettingsTab::General,
             notification_authorization: Default::default(),
@@ -2375,6 +2380,7 @@ impl ZaloGuiApp {
                         invite_search_query: String::new(),
                         quick_reply_popover_open: false,
                     });
+                    background::show_app(ctx);
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
                         egui::UserAttentionType::Critical,
                     ));
@@ -2829,8 +2835,18 @@ impl eframe::App for ZaloGuiApp {
             self.startup_maximized = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         }
-        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q))
-            || ctx.input(|i| i.viewport().close_requested())
+        // Window close (Cmd+W, taskbar, OS) keeps the app running in the background unless a
+        // real quit was requested (updater restart sets `allow_quit`).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            background::hide_app(ctx);
+        }
+        if tray::take_show_request() {
+            background::show_app(ctx);
+        }
+        if tray::take_quit_request()
+            || ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q))
+            || (self.allow_quit && ctx.input(|i| i.viewport().close_requested()))
         {
             self.allow_quit = true;
             if let Some(tx) = WORKER_TX.get() {
@@ -2849,6 +2865,8 @@ impl eframe::App for ZaloGuiApp {
             self.theme_dirty = false;
         }
 
+        // Keep draining worker events (messages, calls, notifications) while hidden.
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
         self.check_events(ctx);
 
         self.ime_just_committed = false;
@@ -3239,14 +3257,10 @@ impl ZaloGuiApp {
                             [Pos2::new(cc.x + d, cc.y - d), Pos2::new(cc.x - d, cc.y + d)],
                             Stroke::new(1.4_f32, close_fg),
                         );
-                        let close_resp = close_resp.on_hover_text("Đóng ứng dụng (Ctrl+Q)");
+                        let close_resp =
+                            close_resp.on_hover_text("Chạy nền (Ctrl+Q để thoát hẳn)");
                         if close_resp.clicked() || close_resp.secondary_clicked() {
-                            self.allow_quit = true;
-                            if let Some(tx) = WORKER_TX.get() {
-                                let _ = tx.send(WorkerCmd::EndCall);
-                            }
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            std::process::exit(0);
+                            background::hide_app(ctx);
                         }
 
                         // Maximize / Restore Button (46x32)

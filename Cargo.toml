@@ -1,10 +1,9 @@
 [package]
 name = "ctdozlite"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["TIPC1110 <tienichpc1110@gmail.com>"]
 description = "Lightweight, high-performance native Zalo PC client written in Rust (zero Node.js, zero Electron)"
-homepage = "https://github.com/minhkhang1008/ctdozlite-next"
 repository = "https://github.com/minhkhang1008/ctdozlite-next"
 license = "MIT OR Apache-2.0"
 default-run = "ctdozlite"
@@ -51,7 +50,10 @@ zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate
 objc2 = "0.5"
 block2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSDictionary", "NSGeometry", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.2", features = ["block2", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSScreen"] }
+objc2-app-kit = { version = "0.2", features = ["block2", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSScreen", "NSApplication", "NSResponder", "NSRunningApplication"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false }
 
 [lib]
 name = "zalo_rust"

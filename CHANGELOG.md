@@ -8,6 +8,15 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-14
+
+### Added (Tính năng mới)
+- **Chạy nền khi đóng cửa sổ:** bấm X chỉ ẩn cửa sổ, app vẫn nhận tin nhắn, thông báo và cuộc gọi. Windows/macOS có icon ở khay hệ thống / menu bar (click để mở lại, menu "Mở Zalo" / "Thoát"); cuộc gọi đến tự hiện cửa sổ. Thoát hẳn bằng menu khay hoặc Ctrl+Q. Linux chưa có icon khay, chỉ thu nhỏ cửa sổ. Chưa kiểm thử trên Windows thật.
+
+### Fixed (Sửa lỗi)
+- **Cảnh báo khi build:** bỏ `package.homepage` thừa; thay `fetch_update` (đã đổi tên trong Rust mới) bằng vòng CAS vẫn chạy được Rust 1.75.
+- **CI phát hành:** nâng các GitHub Actions (checkout, upload/download-artifact, attest-build-provenance, action-gh-release) lên bản chạy Node 24 để hết cảnh báo Node 20.
+
 ## [0.3.0] - 2026-11-14
 
 ### Fixed (Sửa lỗi)
