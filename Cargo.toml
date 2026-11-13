@@ -1,6 +1,6 @@
 [package]
 name = "ctdozlite"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["TIPC1110 <tienichpc1110@gmail.com>"]
 description = "Lightweight, high-performance native Zalo PC client written in Rust (zero Node.js, zero Electron)"
@@ -19,7 +19,7 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["cookies", "json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "process", "fs"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 aes-gcm = "0.10"
@@ -37,11 +37,14 @@ opus = "0.3"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 rsa = "0.9.10"
 lzma-rs = "0.3.0"
+quick-xml = "=0.42.0"
+pdf-extract = "=0.12.1"
 zstd = "0.14.3"
 wasmtime = { version = "50.0.1", default-features = false, features = ["runtime", "cranelift", "std", "anyhow"] }
 getrandom = { version = "0.3", features = ["std"] }
 rustybuzz = "0.20"
 memmap2 = "0.9"
+zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2"] }
 
 # macOS clipboard image paste: same versions winit 0.30 already pulls in (no new crates).
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -34,9 +34,18 @@ else
 fi
 if [[ "$HELPER" == DailyNotifier ]]; then
     BUNDLE="$OUT/DailyNotifier.app"
-    mkdir -p "$BUNDLE/Contents/MacOS"
+    mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
     cp "$OUT/$HELPER" "$BUNDLE/Contents/MacOS/$HELPER"
     cp "$ROOT/packaging/macos/DailyNotifier-Info.plist" "$BUNDLE/Contents/Info.plist"
+    ICONSET="$(mktemp -d)/AppIcon.iconset"
+    mkdir -p "$ICONSET"
+    for sz in 16 32 128 256 512; do
+        sips -s format png -z "$sz" "$sz" "$ROOT/src/assets/app_icon.png" --out "$ICONSET/icon_${sz}x${sz}.png" >/dev/null
+        sz2=$((sz * 2))
+        sips -s format png -z "$sz2" "$sz2" "$ROOT/src/assets/app_icon.png" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICONSET" -o "$BUNDLE/Contents/Resources/AppIcon.icns"
+    rm -rf "$(dirname "$ICONSET")"
     codesign --force --sign - "$BUNDLE"
 fi
 if [[ -n "$APP" ]]; then
@@ -44,6 +53,8 @@ if [[ -n "$APP" ]]; then
     cp "$OUT/$HELPER" "$APP/Contents/$DEST/$HELPER"
     if [[ "$HELPER" == DailyNotifier ]]; then
         cp "$BUNDLE/Contents/Info.plist" "$APP/Contents/Helpers/DailyNotifier.app/Contents/Info.plist"
+        mkdir -p "$APP/Contents/Helpers/DailyNotifier.app/Contents/Resources"
+        cp "$BUNDLE/Contents/Resources/AppIcon.icns" "$APP/Contents/Helpers/DailyNotifier.app/Contents/Resources/AppIcon.icns"
     fi
     if [[ "$HELPER" == HistoryCodec ]]; then
         mkdir -p "$APP/Contents/Resources/ThirdPartyLicenses"

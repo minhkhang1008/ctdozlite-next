@@ -83,22 +83,18 @@ pub fn selected_camera_device() -> String {
         .unwrap_or_default()
 }
 
-/// Check whether `ffmpeg` is installed and reachable in `PATH` (cached after first probe).
+/// Read cached FFmpeg readiness without blocking the UI thread.
 pub fn is_ffmpeg_available() -> bool {
-    static FFMPEG_OK: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-version")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
-        cmd.status().map(|s| s.success()).unwrap_or(false)
-    });
-    *FFMPEG_OK
+    crate::video_tools::available()
+}
+
+/// Read devices previously enumerated by the worker, without I/O on the UI thread.
+pub fn cached_media_devices() -> (Vec<String>, Vec<String>) {
+    CACHED_DEVICES
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default()
 }
 /// Return cached `(mic_devices, camera_devices)` or enumerate once (with `refresh=true` to rescan).
 pub fn list_media_devices(refresh: bool) -> (Vec<String>, Vec<String>) {
@@ -136,7 +132,7 @@ fn enumerate_ffmpeg_cameras() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("ffmpeg");
+        let mut cmd = crate::video_tools::ffmpeg_command();
         cmd.args([
             "-hide_banner",
             "-list_devices",
@@ -191,7 +187,7 @@ fn enumerate_ffmpeg_cameras() -> Vec<String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = std::process::Command::new("ffmpeg");
+        let mut cmd = crate::video_tools::ffmpeg_command();
         cmd.args([
             "-hide_banner",
             "-f",
@@ -981,7 +977,7 @@ fn spawn_camera_capture_thread(
 ) {
     thread::spawn(move || {
         use std::io::Read;
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
 
         let mut current_dev = String::new();
         let mut child_opt: Option<std::process::Child> = None;
@@ -1017,7 +1013,7 @@ fn spawn_camera_capture_thread(
                     );
                     if let Some(ref gtx) = gui_tx {
                         let _ = gtx.send(crate::gui::GuiEvent::StatusUpdate(
-                            "⚠️ Không tìm thấy ffmpeg trong PATH để bật Camera (cài bằng: winget install Gyan.FFmpeg)".into(),
+                            "Chưa có công cụ gọi video. Mở Cài đặt → Cài đặt chung → Cài công cụ gọi video.".into(),
                         ));
                     }
                     if let Some(ref ctx) = egui_ctx {
@@ -1062,7 +1058,7 @@ fn spawn_camera_capture_thread(
                 current_dev = desired.clone();
                 stream_acc.clear();
 
-                let mut cmd = Command::new("ffmpeg");
+                let mut cmd = crate::video_tools::ffmpeg_command();
                 cmd.args(["-hide_banner", "-loglevel", "error"]);
                 #[cfg(target_os = "windows")]
                 cmd.args([
@@ -1403,13 +1399,13 @@ fn run_local_preview_decoder(
     egui_ctx: eframe::egui::Context,
 ) {
     use std::io::{Read, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     const PREV_W: usize = 240;
     const PREV_H: usize = 180;
     const PREV_BYTES: usize = PREV_W * PREV_H * 4;
 
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = crate::video_tools::ffmpeg_command();
     cmd.args([
         "-hide_banner",
         "-loglevel",
@@ -2651,7 +2647,7 @@ fn run_h264_ffmpeg_decoder(
     tex_key: String,
 ) {
     use std::io::{Read, Write};
-    use std::process::{Child, Command, Stdio};
+    use std::process::{Child, Stdio};
     use std::sync::atomic::AtomicU64;
 
     const VID_W: usize = 640;
@@ -2659,7 +2655,7 @@ fn run_h264_ffmpeg_decoder(
     const FRAME_BYTES: usize = VID_W * VID_H * 4;
 
     fn spawn_ffmpeg_h264_child() -> Option<Child> {
-        let mut cmd = Command::new("ffmpeg");
+        let mut cmd = crate::video_tools::ffmpeg_command();
         cmd.args([
             "-hide_banner",
             "-loglevel",

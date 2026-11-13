@@ -99,6 +99,15 @@ pub fn send_sync_message_ws_request(payload: &Value) -> bool {
     });
     send_ws_frame(CMD_SYNC_REQUEST, 0, 1, Some(&body))
 }
+/// Release a Sync V2 phone session after success, cancellation, timeout or error.
+pub fn send_sync_ack_delete(sync_id: &str, reason: &str) -> bool {
+    let body = serde_json::json!({
+        "reqId": format!("req_591_{}", now_ms()),
+        "data": { "syncId": sync_id, "toDevice": 0, "reason": reason },
+    });
+    send_ws_frame(CMD_SYNC_ACK_DELETE, 0, 1, Some(&body))
+}
+
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
                   (KHTML, like Gecko) ZaloPC/26.10.11 Chrome/122.0.0.0 Electron/29.0.0 Safari/537.36";
 

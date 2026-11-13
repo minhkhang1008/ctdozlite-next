@@ -9,9 +9,9 @@ pub mod call;
 pub mod chat;
 pub mod clock;
 pub mod crypto;
-pub mod endpoints;
 /// Colour emoji bitmaps extracted from the system emoji font (worker-side only).
 pub mod emoji_raster;
+pub mod endpoints;
 pub mod feed;
 pub mod gui;
 pub mod history_sync;
@@ -30,6 +30,8 @@ pub mod store;
 pub mod tui;
 pub mod ui;
 pub mod unread;
+pub mod video_player;
+pub mod video_tools;
 pub mod voip_log;
 pub mod zproto_host;
 
@@ -49,3 +51,11 @@ pub mod native_notifications;
 
 #[cfg(any(windows, test))]
 mod clipboard_dib;
+
+pub(crate) mod sync_runtime;
+
+pub mod productivity;
+
+pub mod doc_preview;
+
+pub mod voice;

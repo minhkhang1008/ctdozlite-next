@@ -252,13 +252,16 @@ fn opaque_id() -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-fn helper_payload(title: &str, body: &str) -> Vec<u8> {
+fn helper_payload(title: &str, body: &str, attachment: Option<&Path>) -> Vec<u8> {
     serde_json::json!({
         "title": title,
         "body": body,
         "id": opaque_id(),
         // The GUI already plays its own chime when sound is enabled.
         "sound": false,
+        "attachment": attachment
+            .filter(|path| path.is_absolute() && path.is_file())
+            .and_then(Path::to_str),
     })
     .to_string()
     .into_bytes()
@@ -270,10 +273,39 @@ fn parse_delivery(output: &str) -> Result<(), NotificationError> {
         _ => Err(NotificationError::InvalidResponse),
     }
 }
-async fn notify_via_helper(path: &Path, title: &str, body: &str) -> Result<(), NotificationError> {
-    let child = spawn_with(path, &["--notify"], true).await?;
+async fn notify_via_helper(
+    path: &Path,
+    title: &str,
+    body: &str,
+    attachment: Option<&Path>,
+) -> Result<(), NotificationError> {
+    run_helper_delivery(path, "--notify", title, body, attachment).await
+}
+/// Self-drawn toast: shows the sender avatar as the only icon, which native banners cannot do.
+/// The helper prints `submitted` once the panel is on screen and exits when it is dismissed.
+async fn toast_via_helper(
+    path: &Path,
+    title: &str,
+    body: &str,
+    attachment: Option<&Path>,
+) -> Result<(), NotificationError> {
+    run_helper_delivery(path, "--toast", title, body, attachment).await
+}
+async fn run_helper_delivery(
+    path: &Path,
+    mode: &str,
+    title: &str,
+    body: &str,
+    attachment: Option<&Path>,
+) -> Result<(), NotificationError> {
+    let child = spawn_with(path, &[mode], true).await?;
     parse_delivery(
-        &collect_output(child, Some(helper_payload(title, body)), NOTIFY_DEADLINE).await?,
+        &collect_output(
+            child,
+            Some(helper_payload(title, body, attachment)),
+            NOTIFY_DEADLINE,
+        )
+        .await?,
     )
 }
 /// AppleScript that reads title and body from `argv`, so message text is never parsed as code.
@@ -312,6 +344,21 @@ async fn notify_via_osascript(title: &str, body: &str) -> Result<(), Notificatio
 /// Returns a typed error for unsupported platforms, missing tools, deadlines, denied
 /// authorization or invalid helper output.
 pub async fn notify(title: &str, body: &str) -> Result<(), NotificationError> {
+    notify_with_attachment(title, body, None).await
+}
+
+/// Post a native notification with an optional locally cached sender avatar attachment.
+///
+/// The packaged macOS helper supports the attachment. The AppleScript fallback preserves the
+/// text notification and ignores the image because AppleScript has no attachment API.
+///
+/// # Errors
+/// Returns the same bounded delivery errors as [`notify`].
+pub async fn notify_with_attachment(
+    title: &str,
+    body: &str,
+    attachment: Option<&Path>,
+) -> Result<(), NotificationError> {
     if !cfg!(target_os = "macos") {
         return Err(NotificationError::HelperUnavailable);
     }
@@ -329,7 +376,15 @@ pub async fn notify(title: &str, body: &str) -> Result<(), NotificationError> {
     };
     let helper = helper_path();
     if helper.is_file() {
-        return notify_via_helper(&helper, &title, &body).await;
+        // The toast needs no notification permission; fall back to the native banner if the
+        // helper cannot draw it (older helper binary, no screen).
+        if toast_via_helper(&helper, &title, &body, attachment)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        return notify_via_helper(&helper, &title, &body, attachment).await;
     }
     notify_via_osascript(&title, &body).await
 }
@@ -416,7 +471,7 @@ mod tests {
 
     #[test]
     fn helper_payload_is_json_with_opaque_hex_id() {
-        let raw = helper_payload("A \"quoted\" name", "line");
+        let raw = helper_payload("A \"quoted\" name", "line", None);
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(v["title"], "A \"quoted\" name");
         assert_eq!(v["body"], "line");
@@ -427,6 +482,19 @@ mod tests {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
         assert!(raw.len() <= 4096);
+    }
+
+    #[test]
+    fn helper_payload_includes_only_existing_absolute_attachment() {
+        let path = std::env::temp_dir().join(format!(
+            "ctdozlite-notification-avatar-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"png").unwrap();
+        let raw = helper_payload("Sender", "Body", Some(&path));
+        let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(value["attachment"], path.to_str().unwrap());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -448,7 +516,7 @@ mod tests {
         let fixture =
             Fixture::new("[ \"$1\" = --notify ] || exit 9; cat > \"$0.stdin\"; echo submitted");
         assert_eq!(
-            notify_via_helper(&fixture.0.join("helper"), "Sender", "Body").await,
+            notify_via_helper(&fixture.0.join("helper"), "Sender", "Body", None).await,
             Ok(())
         );
         let stdin = std::fs::read(fixture.0.join("helper.stdin")).unwrap();

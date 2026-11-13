@@ -21,15 +21,22 @@ use crate::logger::{self, FindingLevel, LogEntry, ScanFinding};
 use crate::qr::QrLogin;
 use crate::session::Session;
 
+mod doc_preview_ui;
 #[cfg(target_os = "macos")]
 mod macos_clipboard;
 #[cfg(target_os = "macos")]
 mod macos_drag;
 mod messages;
 mod modals;
+mod productivity;
 mod reactions_dialog;
 mod stickers;
 mod theme;
+mod video_tools_ui;
+// Voice recording has no entry point since the bottom toolbar was removed; kept dormant until a
+// composer-integrated microphone control is designed.
+#[allow(dead_code)]
+mod voice_ui;
 mod worker;
 mod workspace;
 
@@ -45,6 +52,42 @@ fn merge_sent_message(thread: &mut Thread, message: ChatMessage) {
 }
 
 pub enum GuiEvent {
+    VoiceProgress {
+        account: String,
+        generation: u64,
+        seconds: u64,
+        peak: f32,
+        encoding: bool,
+    },
+    VoiceFinished {
+        account: String,
+        generation: u64,
+        thread: String,
+        result: Result<ChatMessage, String>,
+    },
+    VoicePlaybackFinished {
+        message: String,
+        error: Option<String>,
+    },
+    DocPreview {
+        account: String,
+        generation: u64,
+        result: Result<String, String>,
+    },
+    Productivity {
+        account: String,
+        update: Result<crate::productivity::Update, String>,
+    },
+    VideoToolsProgress {
+        progress: f32,
+        status: String,
+    },
+    VideoToolsFinished {
+        result: Result<(), String>,
+    },
+    VideoToolsChecked {
+        available: bool,
+    },
     /// Terminal response for a Settings authorization action.
     NotificationAuthorization {
         request_id: u64,
@@ -71,6 +114,10 @@ pub enum GuiEvent {
     },
     LoginFailed(String),
     ThreadsUpdated(Vec<Thread>),
+    MessageQueuesRefreshed {
+        account_uin: String,
+        threads: Vec<Thread>,
+    },
     MessageSent {
         client_message_id: String,
         thread_id: String,
@@ -97,6 +144,26 @@ pub enum GuiEvent {
     },
     StickerImageFailed {
         key: String,
+    },
+    VideoLoadProgress {
+        generation: u64,
+        downloaded: u64,
+        total: u64,
+    },
+    VideoPlaybackStarted {
+        generation: u64,
+        duration_seconds: Option<f32>,
+    },
+    VideoFrame {
+        generation: u64,
+        image: egui::ColorImage,
+    },
+    VideoFinished {
+        generation: u64,
+    },
+    VideoFailed {
+        generation: u64,
+        error: String,
     },
     StickerStoreLoaded(Vec<crate::chat::StickerPackInfo>),
     StickerPackItemsLoaded {
@@ -222,13 +289,17 @@ pub enum GuiEvent {
     PinnedSnapshotSynced(Vec<String>),
     MuteEventsReceived(Vec<crate::chat::MuteControlEvent>),
     PhoneSyncProgress {
+        account_uin: String,
         progress: f32,
         status: String,
     },
     PhoneSyncFinished {
+        account_uin: String,
         threads: Vec<Thread>,
         added: usize,
         active_threads: usize,
+        phone_imported: usize,
+        phone_complete: bool,
         cancelled: bool,
         error: Option<String>,
     },
@@ -263,18 +334,58 @@ fn phone_sync_completion_message(
     active_threads: usize,
     cancelled: bool,
     error: Option<&str>,
+    phone_imported: usize,
+    phone_complete: bool,
 ) -> String {
     if let Some(err) = error {
         return format!("⚠️ Đồng bộ thất bại: {err}");
     }
+    if phone_imported > 0 || phone_complete {
+        return format!(
+            "{}: đã tải và lưu {phone_imported} tin từ điện thoại; {} tin mới từ Cloud/Nhóm.",
+            if cancelled {
+                "Đã dừng đồng bộ"
+            } else if phone_complete {
+                "Đồng bộ xong"
+            } else {
+                "Đồng bộ chưa đầy đủ"
+            },
+            added.saturating_sub(phone_imported)
+        );
+    }
     let prefix = if cancelled {
         "Đã dừng"
     } else {
-        "Đã hoàn tất"
+        "Đồng bộ chưa đầy đủ"
     };
     format!(
         "{prefix} yêu cầu: {added} tin mới từ Cloud/Nhóm ({active_threads} hội thoại). Lịch sử điện thoại chưa được tải vào ứng dụng."
     )
+}
+
+fn video_position_seconds(base: f32, elapsed: f32, duration: Option<f32>) -> f32 {
+    let position = (base + elapsed).max(0.0);
+    duration
+        .filter(|duration| duration.is_finite() && *duration >= 0.0)
+        .map_or(position, |duration| position.min(duration))
+}
+
+fn format_media_clock(seconds: f32) -> String {
+    let seconds = seconds.max(0.0).floor() as u64;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn media_progress_fraction(elapsed: f32, duration: f32) -> f32 {
+    if !elapsed.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        0.0
+    } else {
+        (elapsed / duration).clamp(0.0, 1.0)
+    }
+}
+
+fn next_video_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +455,24 @@ struct ImageViewerModal {
     zoom: f32,
     pan: Vec2,
 }
+
+struct VideoPlayerModal {
+    generation: u64,
+    account: String,
+    thread: String,
+    message: String,
+    url: String,
+    title: String,
+    status: String,
+    progress: f32,
+    texture: Option<TextureHandle>,
+    finished: bool,
+    playing: bool,
+    position_seconds: f32,
+    started_at: Option<std::time::Instant>,
+    duration_seconds: Option<f32>,
+    volume: f32,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContactsSubTab {
     Friends,
@@ -368,6 +497,9 @@ enum SettingsTab {
 #[serde(default)]
 struct AppSettings {
     // 1. Cài đặt chung
+    phone_sync_platform: Option<crate::history_sync::PhonePlatform>,
+    render_markdown: bool,
+    zalo_single_star_bold: bool,
     show_all_contacts: bool,
     language: String,
     autostart_on_boot: bool,
@@ -439,6 +571,9 @@ impl Default for AppSettings {
             })
             .unwrap_or_else(|| "Downloads/Zalo Received Files".into());
         Self {
+            phone_sync_platform: None,
+            render_markdown: true,
+            zalo_single_star_bold: true,
             show_all_contacts: false,
             language: "Tiếng Việt".into(),
             autostart_on_boot: true,
@@ -456,7 +591,7 @@ impl Default for AppSettings {
             friend_src_qr: true,
             friend_src_group: true,
             friend_src_card: true,
-            theme_mode: "dark".into(),
+            theme_mode: "light".into(),
             use_avatar_as_wallpaper: false,
             enable_notifications: true,
             play_notification_sound: true,
@@ -492,16 +627,23 @@ impl Default for AppSettings {
 
 impl AppSettings {
     fn load() -> Self {
-        std::fs::read_to_string("app_settings.json")
+        Self::load_from(std::path::Path::new("app_settings.json"))
+    }
+
+    fn load_from(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str::<Self>(&s).ok())
             .unwrap_or_default()
     }
 
-    fn save(&self) {
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write("app_settings.json", json);
-        }
+    fn save(&self) -> bool {
+        // Keep snapshots ordered through the worker, including quick theme changes.
+        serde_json::to_string_pretty(self).ok().is_some_and(|json| {
+            WORKER_TX
+                .get()
+                .is_some_and(|tx| tx.send(WorkerCmd::SaveAppSettings { json }).is_ok())
+        })
     }
 }
 
@@ -548,6 +690,12 @@ impl GuiTx {
 }
 
 pub struct ZaloGuiApp {
+    productivity: productivity::State,
+    doc_preview: doc_preview_ui::State,
+    voice: voice_ui::State,
+    video_tools_status: String,
+    video_tools_progress: f32,
+    video_tools_busy: bool,
     // Theme state
     dark_mode: bool,
     theme_dirty: bool,
@@ -620,6 +768,7 @@ pub struct ZaloGuiApp {
     pub(crate) last_typing_ping_at: std::time::Instant,
     active_call: Option<ActiveCallOverlay>,
     image_viewer: Option<ImageViewerModal>,
+    video_player: Option<VideoPlayerModal>,
 
     info_drawer_open: bool,
     profile_menu_open: bool,
@@ -768,6 +917,67 @@ fn thread_texts(threads: &[Thread]) -> impl Iterator<Item = &str> {
 }
 
 impl ZaloGuiApp {
+    fn open_video_tools_setup(&mut self) {
+        self.settings_modal_open = true;
+        self.settings_tab = SettingsTab::General;
+        self.install_video_tools();
+        self.show_toast("Đang chuẩn bị công cụ gọi video. Cài xong, bạn có thể gọi lại ngay.");
+    }
+
+    fn install_video_tools(&mut self) {
+        if self.video_tools_busy {
+            return;
+        }
+        let sent = WORKER_TX
+            .get()
+            .is_some_and(|tx| tx.send(WorkerCmd::InstallVideoTools).is_ok());
+        if sent {
+            self.video_tools_busy = true;
+            self.video_tools_progress = 0.02;
+            self.video_tools_status = "Đang chuẩn bị cài công cụ gọi video…".into();
+        } else {
+            self.show_toast("Tác vụ nền chưa sẵn sàng. Hãy thử lại.");
+        }
+    }
+
+    fn set_theme(&mut self, dark: bool) {
+        self.dark_mode = dark;
+        self.settings.theme_mode = if dark { "dark" } else { "light" }.into();
+        self.theme_dirty = true;
+        if !self.settings.save() {
+            self.show_toast("Không thể lưu giao diện: tác vụ nền chưa sẵn sàng.");
+        }
+    }
+
+    fn start_phone_sync(&mut self) {
+        let Some(platform) = self.settings.phone_sync_platform else {
+            self.settings_modal_open = true;
+            self.settings_tab = SettingsTab::Sync;
+            self.phone_sync_status = "Chọn Android hoặc iPhone trước khi đồng bộ.".into();
+            self.show_toast(self.phone_sync_status.clone());
+            return;
+        };
+        if crate::history_sync::PHONE_SYNC_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+            self.show_toast("Đang đồng bộ tin nhắn, vui lòng chờ…");
+            return;
+        }
+        let sent = WORKER_TX.get().is_some_and(|tx| {
+            tx.send(WorkerCmd::SyncPhoneMessages {
+                threads: self.threads.clone(),
+                platform,
+            })
+            .is_ok()
+        });
+        if sent {
+            self.phone_sync_progress = 0.05;
+            self.phone_sync_status = "Đang chuẩn bị đồng bộ điện thoại…".into();
+            self.status_msg = self.phone_sync_status.clone();
+            self.show_toast(self.phone_sync_status.clone());
+        } else {
+            self.show_toast("Không thể bắt đầu đồng bộ: tác vụ nền chưa sẵn sàng.");
+        }
+    }
+
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         mut session: Session,
@@ -850,6 +1060,12 @@ impl ZaloGuiApp {
             .unwrap_or(0);
 
         let app = Self {
+            productivity: Default::default(),
+            doc_preview: Default::default(),
+            voice: Default::default(),
+            video_tools_status: "Đang kiểm tra công cụ gọi video…".into(),
+            video_tools_progress: 0.0,
+            video_tools_busy: false,
             dark_mode,
             theme_dirty: false,
             is_logged_in,
@@ -897,6 +1113,7 @@ impl ZaloGuiApp {
             last_typing_ping_at: std::time::Instant::now(),
             active_call: None,
             image_viewer: None,
+            video_player: None,
             status_msg: "Trực tuyến · Sẵn sàng".into(),
             info_drawer_open: loaded_settings.info_drawer_open,
             profile_menu_open: false,
@@ -1109,6 +1326,63 @@ impl ZaloGuiApp {
     fn check_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
+                GuiEvent::VoiceProgress {
+                    account,
+                    generation,
+                    seconds,
+                    peak,
+                    encoding,
+                } => {
+                    if self.is_logged_in
+                        && account == self.user_uin
+                        && generation == self.voice.generation
+                    {
+                        self.voice.recording = !encoding;
+                        self.voice.seconds = seconds;
+                        self.voice.peak = peak;
+                    }
+                }
+                GuiEvent::VoiceFinished {
+                    account,
+                    generation,
+                    thread,
+                    result,
+                } => {
+                    if self.is_logged_in
+                        && account == self.user_uin
+                        && generation == self.voice.generation
+                    {
+                        self.voice.busy = false;
+                        self.voice.recording = false;
+                        match result {
+                            Ok(message) => {
+                                if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread) {
+                                    t.preview = message.text.clone();
+                                    merge_sent_message(t, message);
+                                }
+                                self.persist_threads_async();
+                                self.show_toast("Đã gửi ghi âm.");
+                            }
+                            Err(error) => self.show_toast(error),
+                        }
+                    }
+                }
+                GuiEvent::VoicePlaybackFinished { message: _, error } => {
+                    if let Some(error) = error {
+                        self.show_toast(error);
+                    }
+                }
+                GuiEvent::DocPreview {
+                    account,
+                    generation,
+                    result,
+                } => {
+                    if account == self.user_uin && generation == self.doc_preview.generation {
+                        self.doc_preview.loading = false;
+                        self.doc_preview.text = result.unwrap_or_else(|e| e);
+                    }
+                }
+                GuiEvent::Productivity { account, update } => self.local_update(account, update),
                 GuiEvent::NotificationAuthorization { request_id, result } => {
                     self.notification_authorization.finish(request_id, result);
                 }
@@ -1174,7 +1448,20 @@ impl ZaloGuiApp {
                     self.login_in_progress = false;
                     self.login_status_msg = format!("Lỗi đăng nhập: {err}");
                 }
-                GuiEvent::ThreadsUpdated(updates) => {
+                event @ (GuiEvent::ThreadsUpdated(_) | GuiEvent::MessageQueuesRefreshed { .. }) => {
+                    let updates = match event {
+                        GuiEvent::ThreadsUpdated(threads) => threads,
+                        GuiEvent::MessageQueuesRefreshed {
+                            account_uin,
+                            threads,
+                        } => {
+                            if account_uin != self.user_uin {
+                                continue;
+                            }
+                            threads
+                        }
+                        _ => unreachable!(),
+                    };
                     ensure_cjk_font(ctx, thread_texts(&updates));
                     if self.is_logged_in && !updates.is_empty() {
                         let prev_selected = self.threads.get(self.selected_thread_index).cloned();
@@ -1299,6 +1586,9 @@ impl ZaloGuiApp {
                                                                 WorkerCmd::PostNativeNotification {
                                                                     title: sender_label,
                                                                     body: preview_short,
+                                                                    avatar_url: existing
+                                                                        .avatar
+                                                                        .clone(),
                                                                 },
                                                             );
                                                         }
@@ -1394,6 +1684,9 @@ impl ZaloGuiApp {
                     self.status_msg = format!("Trực tuyến · Cập nhật {}", crate::ui::clock());
                 }
                 GuiEvent::SessionExpired(reason) => {
+                    self.productivity = Default::default();
+                    self.voice = Default::default();
+                    self.doc_preview = Default::default();
                     self.is_logged_in = false;
                     self.qr_texture = None;
                     self.qr_status =
@@ -1411,6 +1704,9 @@ impl ZaloGuiApp {
                     self.status_msg = "Đã xoá dữ liệu tin nhắn cục bộ (session giữ nguyên)".into();
                 }
                 GuiEvent::LoggedOut => {
+                    self.productivity = Default::default();
+                    self.voice = Default::default();
+                    self.doc_preview = Default::default();
                     self.is_logged_in = false;
                     self.user_name.clear();
                     self.user_uin.clear();
@@ -1720,6 +2016,102 @@ impl ZaloGuiApp {
                     // falls back to the monochrome glyph.
                     if !key.starts_with("emoji_") {
                         self.loading_stickers.remove(&key);
+                    }
+                }
+                GuiEvent::VideoLoadProgress {
+                    generation,
+                    downloaded,
+                    total,
+                } => {
+                    if let Some(player) = self
+                        .video_player
+                        .as_mut()
+                        .filter(|player| player.generation == generation && player.playing)
+                    {
+                        player.progress = if total > 0 {
+                            (downloaded as f32 / total as f32).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        player.status = if total > 0 {
+                            format!(
+                                "Đang tải video: {} / {} MB",
+                                downloaded / (1024 * 1024),
+                                total / (1024 * 1024)
+                            )
+                        } else {
+                            format!("Đang tải video: {} MB", downloaded / (1024 * 1024))
+                        };
+                    }
+                }
+                GuiEvent::VideoPlaybackStarted {
+                    generation,
+                    duration_seconds,
+                } => {
+                    if let Some(player) = self
+                        .video_player
+                        .as_mut()
+                        .filter(|player| player.generation == generation && player.playing)
+                    {
+                        player.progress = 1.0;
+                        player.status = "Đang phát".into();
+                        player.finished = false;
+                        player.playing = true;
+                        player.started_at = Some(std::time::Instant::now());
+                        if duration_seconds.is_some() {
+                            player.duration_seconds = duration_seconds;
+                        }
+                    }
+                }
+                GuiEvent::VideoFrame { generation, image } => {
+                    crate::video_player::acknowledge_frame(generation);
+                    if let Some(player) = self
+                        .video_player
+                        .as_mut()
+                        .filter(|player| player.generation == generation)
+                    {
+                        if let Some(texture) = player.texture.as_mut() {
+                            texture.set(image, TextureOptions::LINEAR);
+                        } else {
+                            player.texture = Some(ctx.load_texture(
+                                format!("video_player_{generation}"),
+                                image,
+                                TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
+                }
+                GuiEvent::VideoFinished { generation } => {
+                    if let Some(player) = self
+                        .video_player
+                        .as_mut()
+                        .filter(|player| player.generation == generation)
+                    {
+                        player.status = "Đã phát xong".into();
+                        player.finished = true;
+                        player.playing = false;
+                        let elapsed = player
+                            .started_at
+                            .take()
+                            .map(|started| started.elapsed().as_secs_f32())
+                            .unwrap_or(0.0);
+                        player.position_seconds = video_position_seconds(
+                            player.position_seconds,
+                            elapsed,
+                            player.duration_seconds,
+                        );
+                    }
+                }
+                GuiEvent::VideoFailed { generation, error } => {
+                    if let Some(player) = self
+                        .video_player
+                        .as_mut()
+                        .filter(|player| player.generation == generation && player.playing)
+                    {
+                        player.status = error;
+                        player.finished = true;
+                        player.playing = false;
+                        player.started_at = None;
                     }
                 }
                 GuiEvent::StickerStoreLoaded(packs) => {
@@ -2041,6 +2433,8 @@ impl ZaloGuiApp {
                 } => {
                     let head = if cancelled {
                         "Đã dừng đồng bộ"
+                    } else if !errors.is_empty() {
+                        "Đồng bộ chưa đầy đủ"
                     } else {
                         "Đồng bộ xong"
                     };
@@ -2080,9 +2474,12 @@ impl ZaloGuiApp {
                                                     &info.current_version,
                                                 );
                                             if let Some(tx) = WORKER_TX.get() {
-                                                let _ = tx.send(
-                                                    WorkerCmd::PostNativeNotification { title, body },
-                                                );
+                                                let _ =
+                                                    tx.send(WorkerCmd::PostNativeNotification {
+                                                        title,
+                                                        body,
+                                                        avatar_url: None,
+                                                    });
                                             }
                                         }
                                     }
@@ -2126,6 +2523,10 @@ impl ZaloGuiApp {
                     self.show_toast(format!("✅ Đã cập nhật lên v{ver} — Đang khởi động lại…"));
                     self.allow_quit = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    if self.is_logged_in {
+                        self.request_local_quit(ctx);
+                        return;
+                    }
                     std::process::exit(0);
                 }
                 GuiEvent::MuteSnapshotSynced(mute_map) => {
@@ -2193,18 +2594,57 @@ impl ZaloGuiApp {
                         self.persist_threads_async();
                     }
                 }
-                GuiEvent::PhoneSyncProgress { progress, status } => {
+                GuiEvent::VideoToolsProgress { progress, status } => {
+                    self.video_tools_progress = progress;
+                    self.video_tools_status = status;
+                }
+                GuiEvent::VideoToolsFinished { result } => {
+                    self.video_tools_busy = false;
+                    self.video_tools_progress = 0.0;
+                    self.video_tools_status = match result {
+                        Ok(()) => {
+                            "Đã cài công cụ gọi video. Bạn có thể bật camera hoặc gọi lại ngay."
+                                .into()
+                        }
+                        Err(error) => error,
+                    };
+                    self.show_toast(self.video_tools_status.clone());
+                }
+                GuiEvent::VideoToolsChecked { available } => {
+                    if !self.video_tools_busy {
+                        self.video_tools_status = if available {
+                            "Công cụ gọi video đã sẵn sàng."
+                        } else {
+                            "Chưa có FFmpeg để dùng camera và xem video cuộc gọi."
+                        }
+                        .into();
+                    }
+                }
+                GuiEvent::PhoneSyncProgress {
+                    account_uin,
+                    progress,
+                    status,
+                } => {
+                    if account_uin != self.user_uin {
+                        continue;
+                    }
                     self.phone_sync_progress = progress;
                     self.phone_sync_status = status.clone();
                     self.status_msg = status;
                 }
                 GuiEvent::PhoneSyncFinished {
+                    account_uin,
                     threads,
                     added,
                     active_threads,
+                    phone_imported,
+                    phone_complete,
                     cancelled,
                     error,
                 } => {
+                    if account_uin != self.user_uin {
+                        continue;
+                    }
                     self.phone_sync_progress = 0.0;
                     if !threads.is_empty() {
                         for nt in threads {
@@ -2249,6 +2689,8 @@ impl ZaloGuiApp {
                         active_threads,
                         cancelled,
                         error.as_deref(),
+                        phone_imported,
+                        phone_complete,
                     );
                     self.phone_sync_status = msg.clone();
                     self.status_msg = msg.clone();
@@ -2589,7 +3031,20 @@ impl eframe::App for ZaloGuiApp {
                     self.render_login_screen(ui, &pal);
                 });
         } else {
+            ctx.data_mut(|d| {
+                d.insert_temp(
+                    Id::new("markdown-options"),
+                    (
+                        self.settings.render_markdown,
+                        self.settings.zalo_single_star_bold,
+                    ),
+                )
+            });
+            let before_draft = self.local_begin(ctx);
             self.render_chat_workspace(ctx, &pal);
+            self.local_end(before_draft);
+            self.render_local_window(ctx);
+            self.render_doc_preview(ctx);
         }
 
         // Auto-notification modal for new GitHub Releases (works on both Login & Chat screens)
@@ -2894,8 +3349,7 @@ impl ZaloGuiApp {
                             .on_hover_text("Chuyển đổi giao diện Sáng / Tối")
                             .clicked()
                         {
-                            self.dark_mode = !self.dark_mode;
-                            self.theme_dirty = true;
+                            self.set_theme(!self.dark_mode);
                         }
 
                         buttons_left_x = th_rect.left();
@@ -3184,7 +3638,37 @@ impl ZaloGuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_newer_semver, phone_sync_completion_message};
+    use super::{is_newer_semver, phone_sync_completion_message, video_position_seconds};
+
+    #[test]
+    fn phone_platform_requires_a_choice_and_preserves_both_platforms() {
+        let settings: super::AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(serde_json::to_value(&settings).unwrap()["phone_sync_platform"].is_null());
+        for platform in ["Android", "Ios"] {
+            let settings: super::AppSettings =
+                serde_json::from_value(serde_json::json!({"phone_sync_platform": platform}))
+                    .unwrap();
+            let restored: super::AppSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(restored).unwrap()["phone_sync_platform"],
+                platform
+            );
+        }
+    }
+
+    #[test]
+    fn theme_defaults_to_light_and_preserves_saved_choice() {
+        let settings: super::AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.theme_mode, "light");
+        for mode in ["light", "dark"] {
+            let settings: super::AppSettings =
+                serde_json::from_value(serde_json::json!({"theme_mode": mode})).unwrap();
+            let restored: super::AppSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.theme_mode, mode);
+        }
+    }
 
     #[test]
     fn sent_message_reconciles_when_server_push_arrives_first() {
@@ -3265,16 +3749,32 @@ mod tests {
     }
 
     #[test]
+    fn phone_sync_completion_reports_only_observed_phone_insertions() {
+        let text = phone_sync_completion_message(15, 3, false, None, 12, true);
+        assert!(text.contains("12 tin từ điện thoại"));
+        assert!(text.contains("3 tin mới từ Cloud/Nhóm"));
+        assert!(!text.contains("chưa được tải"));
+    }
+
+    #[test]
     fn phone_sync_completion_does_not_claim_phone_messages_were_imported() {
-        let none = phone_sync_completion_message(0, 0, false, None);
+        let none = phone_sync_completion_message(0, 0, false, None, 0, false);
         assert!(none.contains("Lịch sử điện thoại chưa được tải vào ứng dụng"));
         assert!(none.contains("0 tin mới từ Cloud/Nhóm"));
+        assert!(!none.contains("hoàn tất"));
 
-        let cloud = phone_sync_completion_message(12, 3, false, None);
+        let cloud = phone_sync_completion_message(12, 3, false, None, 0, false);
         assert!(cloud.contains("12 tin mới từ Cloud/Nhóm (3 hội thoại)"));
         assert!(cloud.contains("Lịch sử điện thoại chưa được tải vào ứng dụng"));
 
-        let failed = phone_sync_completion_message(0, 0, false, Some("network"));
+        let failed = phone_sync_completion_message(0, 0, false, Some("network"), 0, false);
         assert!(failed.contains("Đồng bộ thất bại: network"));
+    }
+
+    #[test]
+    fn video_position_advances_only_while_playing_and_clamps_to_duration() {
+        assert_eq!(video_position_seconds(4.0, 3.5, Some(16.0)), 7.5);
+        assert_eq!(video_position_seconds(14.0, 4.0, Some(16.0)), 16.0);
+        assert_eq!(video_position_seconds(4.0, 0.0, None), 4.0);
     }
 }

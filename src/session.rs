@@ -40,6 +40,32 @@ pub fn is_trusted_zalo_url(url: &str) -> bool {
     })
 }
 
+/// Return whether a URL is an observed Zalo media-delivery URL safe for cookie-free downloads.
+///
+/// This is intentionally broader than [`is_trusted_zalo_url`]. Callers must use a client without
+/// the session cookie jar for `dlmd.me` and `dlfl.vn`; credentials remain restricted to the core
+/// Zalo domains accepted by [`is_trusted_zalo_url`].
+pub fn is_trusted_zalo_media_url(url: &str) -> bool {
+    if is_trusted_zalo_url(url) {
+        return true;
+    }
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    ["dlmd.me", "dlfl.vn"].iter().any(|base| {
+        host == *base
+            || host
+                .strip_suffix(base)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Client-Side Privacy Blocker (block outbound typing / delivered / seen)
 // ---------------------------------------------------------------------------
@@ -1475,6 +1501,26 @@ mod tests {
             "not a URL",
         ] {
             assert!(!is_trusted_zalo_url(url), "expected rejected URL: {url}");
+        }
+    }
+
+    #[test]
+    fn trusted_media_url_accepts_observed_cookie_free_cdns_only_over_https() {
+        for url in [
+            "https://f141-zvc.dlmd.me/mc/video-token",
+            "https://video-stal-42.dlmd.me/gr/video-token",
+            "https://file-stal-3.dlfl.vn/gr/document.pdf",
+            "https://voice-aac-dl.zdn.vn/voice.aac",
+        ] {
+            assert!(is_trusted_zalo_media_url(url), "expected media URL: {url}");
+        }
+        for url in [
+            "http://f141-zvc.dlmd.me/mc/video-token",
+            "https://dlmd.me.attacker.test/video",
+            "https://notdlfl.vn/file",
+            "https://example.com/video.mp4",
+        ] {
+            assert!(!is_trusted_zalo_media_url(url), "expected rejection: {url}");
         }
     }
 

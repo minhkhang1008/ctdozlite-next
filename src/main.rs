@@ -37,6 +37,9 @@ fn activate_logged_in_account(s: &Session) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--internal-doc-preview"] {
+        return zalo_rust::doc_preview::helper_entry();
+    }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
             "{} v{}",
@@ -85,6 +88,7 @@ async fn main() -> Result<()> {
         }
     }
     let data_path = data_dir::initialize(&args)?;
+    zalo_rust::video_tools::refresh(&data_path).await;
     if args.iter().any(|a| a == "--print-data-dir") {
         println!("{}", data_path.display());
         return Ok(());

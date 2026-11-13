@@ -295,17 +295,9 @@ impl ZaloGuiApp {
                         ))
                         .clicked()
                     {
-                        self.phone_sync_progress = 0.05;
-                        self.phone_sync_status =
-                            "📲 Đang gửi yêu cầu đồng bộ tin nhắn tới điện thoại…".into();
-                        let threads = self.threads.clone();
-                        if let Some(tx) = WORKER_TX.get() {
-                            let _ = tx.send(WorkerCmd::SyncPhoneMessages {
-                                threads,
-                                send_phone_prompt: true,
-                            });
-                        }
-                        self.show_toast("📲 Đang gửi yêu cầu đồng bộ tin nhắn tới điện thoại…");
+                        self.start_phone_sync();
+                        self.settings_modal_open = true;
+                        self.settings_tab = SettingsTab::Sync;
                     }
 
                     ui.add_space(8.0);
@@ -381,6 +373,7 @@ impl ZaloGuiApp {
             self.render_reactions_dialog(ctx, pal);
             self.render_call_overlay(ctx, pal);
             self.render_image_viewer_modal(ctx, pal);
+            self.render_video_player_modal(ctx, pal);
             self.render_phone_lookup_modal(ctx, pal);
             self.render_settings_modal(ctx, pal);
             self.render_schedule_modal(ctx, pal);
@@ -546,8 +539,17 @@ impl ZaloGuiApp {
                                 }
 
                                 // Add Friend / Lookup by Phone Button (`+👤`)
-                                let (add_rect, add_resp) =
-                                    ui.allocate_exact_size(Vec2::new(32.0, 32.0), Sense::click());
+                                // Pinned to the search box edge: `ui.put` above rewinds the layout
+                                // cursor, so allocating here would shift the button left while typing.
+                                let add_rect = Rect::from_min_size(
+                                    Pos2::new(sbox_rect.right() + 8.0, sbox_rect.top()),
+                                    Vec2::new(32.0, 32.0),
+                                );
+                                let add_resp = ui.interact(
+                                    add_rect,
+                                    Id::new("sidebar_add_friend_btn"),
+                                    Sense::click(),
+                                );
                                 // Zalo PC: frameless tertiary icon button, hover tint only.
                                 if self.phone_modal_open || add_resp.hovered() {
                                     ui.painter().rect_filled(
@@ -1079,6 +1081,8 @@ impl ZaloGuiApp {
                                         .map(|(w, _)| w.as_str())
                                         .unwrap_or("Đang");
                                     format!("✍ {who} đang soạn thảo…")
+                                } else if let Some(draft) = self.local_draft_preview(&t.id) {
+                                    draft
                                 } else if t.preview.is_empty() {
                                     if t.is_group {
                                         "Nhóm trò chuyện".to_string()
@@ -2749,17 +2753,16 @@ impl ZaloGuiApp {
                                         .clicked()
                                     {
                                         let ff_ok = crate::media::is_ffmpeg_available();
-                                        let (_, cams) = crate::media::list_media_devices(false);
+                                        let (_, cams) = crate::media::cached_media_devices();
                                         let can_cam = ff_ok && !cams.is_empty();
                                         if !ff_ok {
-                                            self.show_toast(
-                                                "⚠️ Không tìm thấy ffmpeg trong PATH để bật Camera (cài bằng: winget install Gyan.FFmpeg)",
-                                            );
+                                            self.open_video_tools_setup();
                                         } else if cams.is_empty() {
                                             self.show_toast(
                                                 "⚠️ Không phát hiện thiết bị Camera trên máy — đang gọi không hình",
                                             );
                                         }
+                                        if ff_ok {
                                         self.active_call = Some(ActiveCallOverlay {
                                             partner_id: thread_id.clone(),
                                             partner_name: thread_name.clone(),
@@ -2791,6 +2794,7 @@ impl ZaloGuiApp {
                                                 is_video: true,
                                                 is_group,
                                             });
+                                        }
                                         }
                                     }
 
@@ -4102,19 +4106,13 @@ impl ZaloGuiApp {
                                         }
                                     }
                                     self.persist_threads_async();
-                                }
-                                BubbleAction::ScheduleReminder => {
-                                    let snippet = m.text.trim();
-                                    if self.input_message.trim().is_empty() && !snippet.is_empty() {
-                                        self.input_message = format!("⏰ [Nhắc hẹn] {snippet}");
-                                    } else if self.input_message.trim().is_empty() {
-                                        self.input_message = "⏰ [Nhắc hẹn] Kiểm tra lại tin nhắn".into();
+                                    if action == BubbleAction::ToggleStar {
+                                        if let Some(message) = self.threads.get(self.selected_thread_index).and_then(|t|t.messages.get(idx)) {
+                                            self.local_action(crate::productivity::Action::Save { thread:thread_id.clone(),msg:message.id.clone(),note:message.is_starred.then(String::new) });
+                                        }
                                     }
-                                    self.schedule_editing_id = None;
-                                    self.schedule_modal_open = true;
-                                    self.refresh_scheduled_items();
-                                    self.show_toast("🕒 Chọn mốc thời gian để đặt nhắc hẹn");
                                 }
+                                BubbleAction::ScheduleReminder => { self.open_local_reminder(thread_id.clone(), m); }
                                 BubbleAction::CallAgain { is_video } => {
                                     self.active_call = Some(ActiveCallOverlay {
                                         partner_id: thread_id.clone(),
@@ -4200,6 +4198,7 @@ impl ZaloGuiApp {
                                         pan: Vec2::ZERO,
                                     });
                                 }
+                                BubbleAction::PreviewDoc { url, file_name } => { self.open_doc_preview(url,file_name); }
                                 BubbleAction::DownloadFile { url, file_name } => {
                                     self.show_toast(format!(
                                         "⏳ Đang tải tập tin \"{file_name}\"…"
@@ -4209,6 +4208,66 @@ impl ZaloGuiApp {
                                             url,
                                             file_name,
                                             download_dir: self.settings.download_dir.clone(),
+                                        });
+                                    }
+                                }
+                                BubbleAction::OpenVideo {
+                                    url,
+                                    file_name,
+                                    message_id,
+                                    duration_seconds,
+                                } => {
+                                    let generation = next_video_generation();
+                                    self.video_player = Some(VideoPlayerModal {
+                                        generation,
+                                        account: self.user_uin.clone(),
+                                        thread: thread_id.clone(),
+                                        message: message_id.clone(),
+                                        url: url.clone(),
+                                        title: file_name,
+                                        status: "Đang chuẩn bị video…".into(),
+                                        progress: 0.0,
+                                        texture: None,
+                                        finished: false,
+                                        playing: true,
+                                        position_seconds: 0.0,
+                                        started_at: None,
+                                        duration_seconds,
+                                        volume: 1.0,
+                                    });
+                                    if let Some(tx) = WORKER_TX.get() {
+                                        let _ = tx.send(WorkerCmd::StartVideo {
+                                            account: self.user_uin.clone(),
+                                            thread: thread_id.clone(),
+                                            message: message_id,
+                                            generation,
+                                            url,
+                                            start_at_seconds: 0.0,
+                                            volume: 1.0,
+                                        });
+                                    }
+                                }
+                                BubbleAction::OpenVoice { url, message_id } => {
+                                    static NEXT_VOICE_PLAYBACK_GENERATION: std::sync::atomic::AtomicU64 =
+                                        std::sync::atomic::AtomicU64::new(1);
+                                    let generation = NEXT_VOICE_PLAYBACK_GENERATION.fetch_add(
+                                        1,
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
+                                    if let Some(tx) = WORKER_TX.get() {
+                                        let _ = tx.send(WorkerCmd::StartVoicePlayback {
+                                            account: self.user_uin.clone(),
+                                            thread: thread_id.clone(),
+                                            message: message_id,
+                                            generation,
+                                            url,
+                                        });
+                                    }
+                                }
+                                BubbleAction::StopVoice { message_id } => {
+                                    if let Some(tx) = WORKER_TX.get() {
+                                        let _ = tx.send(WorkerCmd::StopVoicePlayback {
+                                            message: message_id,
                                         });
                                     }
                                 }
@@ -4512,6 +4571,7 @@ impl ZaloGuiApp {
                             // Esc leaves reply mode. The @ popover above takes Esc first, and open
                             // modals (drawn later this frame) keep their own Esc-to-close.
                             let modal_open = self.image_viewer.is_some()
+                                || self.video_player.is_some()
                                 || self.reactions_dialog.is_some()
                                 || self.forward_msg.is_some()
                                 || self.message_details.is_some()
@@ -5431,6 +5491,7 @@ impl ZaloGuiApp {
         self.render_reactions_dialog(ctx, pal);
         self.render_call_overlay(ctx, pal);
         self.render_image_viewer_modal(ctx, pal);
+        self.render_video_player_modal(ctx, pal);
         self.render_phone_lookup_modal(ctx, pal);
         self.render_schedule_modal(ctx, pal);
         self.render_settings_modal(ctx, pal);

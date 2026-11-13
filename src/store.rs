@@ -120,6 +120,7 @@ impl MessageStore {
             )?;
         }
 
+        crate::productivity::init_schema(&conn)?;
         if path != ":memory:" {
             enforce_sqlite_file_permissions(std::path::Path::new(path))?;
         }

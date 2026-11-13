@@ -47,6 +47,11 @@ pub const FRIEND_BOARD: &str = "https://friendboard-wpa.chat.zalo.me";
 /// Legacy board host (`apiBoardDomain`); kept as a fallback for `/api/board/pin`.
 pub const BOARD: &str = "https://board-wpa.chat.zalo.me";
 
+/// Pinned FFmpeg 9.0.2 static downloads, never used with Zalo credentials.
+pub const FFMPEG_MAC_ARM64: &str = "https://www.osxexperts.net/ffmpeg902arm.zip";
+/// Intel build from the macOS distributor linked by ffmpeg.org.
+pub const FFMPEG_MAC_INTEL: &str = "https://evermeet.cx/ffmpeg/ffmpeg-9.0.2.zip";
+
 /// Look up a service domain by key.
 pub fn service(key: &str) -> Option<&'static str> {
     SERVICE_MAP_V3
@@ -54,3 +59,13 @@ pub fn service(key: &str) -> Option<&'static str> {
         .find(|(k, _)| *k == key)
         .map(|(_, v)| *v)
 }
+
+/// Exact publisher/mirror hosts allowed for pinned video-tool downloads.
+pub const FFMPEG_DOWNLOAD_HOSTS: &[&str] = &["www.osxexperts.net", "evermeet.cx", "e.deolaha.ca"];
+
+/// Public zproto runtime, fetched without session credentials and pinned by digest.
+pub const ZPROTO_RUNTIME: &str =
+    "https://chat.zalo.me/libs/libzproto_wasm_bg.5ea0fb2c9af4a45bc7882b71307b6f83.wasm";
+
+/// Public asset origin used as the runtime request referer, without credentials.
+pub const ZPROTO_PUBLIC_ORIGIN: &str = "https://chat.zalo.me/";

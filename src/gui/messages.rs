@@ -1409,6 +1409,177 @@ pub(super) fn message_copy_text(msg: &ChatMessage) -> String {
     msg.text.clone()
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum MdBlock {
+    Code {
+        lang: String,
+        body: String,
+    },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    Lines(Vec<String>),
+}
+
+fn split_md_blocks(raw: &str) -> Vec<MdBlock> {
+    let mut out: Vec<MdBlock> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    let mut in_code = false;
+    let mut code_lang = String::new();
+    let mut code_body: Vec<String> = Vec::new();
+    let flush = |pending: &mut Vec<String>, out: &mut Vec<MdBlock>| {
+        if !pending.is_empty() {
+            out.push(MdBlock::Lines(std::mem::take(pending)));
+        }
+    };
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let t = line.trim_end();
+        if in_code {
+            if t.trim_start().starts_with("```") {
+                in_code = false;
+                out.push(MdBlock::Code {
+                    lang: std::mem::take(&mut code_lang),
+                    body: code_body.join("\n"),
+                });
+                code_body.clear();
+            } else {
+                code_body.push(line.to_string());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(lang) = t.trim_start().strip_prefix("```") {
+            flush(&mut pending, &mut out);
+            in_code = true;
+            code_lang = lang.trim().to_string();
+            i += 1;
+            continue;
+        }
+        if is_table_header(t) && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim_end())
+        {
+            let headers = split_table_row(t);
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            let mut j = i + 2;
+            let mut ok = false;
+            while j < lines.len() {
+                let rl = lines[j].trim_end();
+                if !rl.trim_start().starts_with('|') || !rl.trim_end().ends_with('|') {
+                    break;
+                }
+                let cells = split_table_row(rl);
+                if cells.len() != headers.len() {
+                    break;
+                }
+                rows.push(cells);
+                ok = true;
+                j += 1;
+            }
+            if ok {
+                flush(&mut pending, &mut out);
+                out.push(MdBlock::Table { headers, rows });
+                i = j;
+                continue;
+            }
+        }
+        pending.push(line.to_string());
+        i += 1;
+    }
+    if in_code {
+        let mut all = vec![format!("```{}", code_lang)];
+        all.extend(code_body);
+        pending.extend(all);
+        flush(&mut pending, &mut out);
+    } else {
+        flush(&mut pending, &mut out);
+    }
+    out
+}
+
+fn is_table_header(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.ends_with('|') && t.contains('|') && split_table_row(line).len() >= 2
+}
+
+fn is_table_separator(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with('|') || !t.ends_with('|') {
+        return false;
+    }
+    let cells: Vec<&str> = t.trim_matches('|').split('|').map(str::trim).collect();
+    if cells.len() < 2 {
+        return false;
+    }
+    cells.iter().all(|c| {
+        let c = c.trim_matches(':');
+        !c.is_empty() && c.len() >= 3 && c.chars().all(|ch| ch == '-')
+    })
+}
+
+fn split_table_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_string())
+        .collect()
+}
+
+fn parse_ordered_item(line: &str) -> Option<(String, usize, String)> {
+    let indent = line.bytes().take_while(|&b| b == b' ').count().min(12);
+    let t = line.trim_start();
+    let dot = t.find(". ")?;
+    let (num, _) = t.split_at(dot);
+    if !num.is_empty() && num.len() <= 3 && num.chars().all(|c| c.is_ascii_digit()) {
+        Some((num.to_string(), indent, t[dot + 2..].to_string()))
+    } else {
+        None
+    }
+}
+
+fn consume_zalo_bold(
+    job: &mut egui::text::LayoutJob,
+    rest: &str,
+    base_size: f32,
+    base_color: Color32,
+    pal: &ThemePalette,
+) -> Option<usize> {
+    if !rest.starts_with('*') || rest.starts_with("**") {
+        return None;
+    }
+    let after = &rest[1..];
+    let end = after.find('*')?;
+    if end == 0 || end > 120 {
+        return None;
+    }
+    let inner = &after[..end];
+    if inner.starts_with(char::is_whitespace)
+        || inner.ends_with(char::is_whitespace)
+        || inner.contains('\n')
+        || inner.contains("http")
+        || inner.contains('@')
+    {
+        return None;
+    }
+    job.append(
+        inner,
+        0.0,
+        egui::TextFormat {
+            font_id: FontId::proportional(base_size + 0.4),
+            color: if pal.is_dark {
+                Color32::WHITE
+            } else {
+                pal.text_primary
+            },
+            ..Default::default()
+        },
+    );
+    let _ = base_color;
+    Some(1 + end + 1)
+}
+
 fn render_markdown_inline_rich(
     ui: &mut egui::Ui,
     text: &str,
@@ -1672,6 +1843,23 @@ fn render_markdown_inline_rich(
             }
         }
 
+        if rest.starts_with('_') && !rest.starts_with("__") {
+            let after = &rest[1..];
+            if let Some(end) = after.find('_').filter(|end| *end > 0) {
+                job.append(
+                    &after[..end],
+                    0.0,
+                    egui::TextFormat {
+                        font_id: FontId::proportional(base_size),
+                        color: base_color,
+                        italics: true,
+                        ..Default::default()
+                    },
+                );
+                rest = &after[end + 1..];
+                continue;
+            }
+        }
         if rest.starts_with("~~") {
             let after = &rest[2..];
             if let Some(end_s) = after.find("~~") {
@@ -1686,6 +1874,17 @@ fn render_markdown_inline_rich(
                     },
                 );
                 rest = &after[end_s + 2..];
+                continue;
+            }
+        }
+        let single_bold = ui
+            .ctx()
+            .data(|d| d.get_temp::<(bool, bool)>(Id::new("markdown-options")))
+            .unwrap_or((true, true))
+            .1;
+        if single_bold {
+            if let Some(used) = consume_zalo_bold(&mut job, rest, base_size, base_color, pal) {
+                rest = &rest[used..];
                 continue;
             }
         }
@@ -1781,6 +1980,101 @@ fn render_markdown_inline_rich(
 }
 
 pub(super) fn render_chat_markdown_block(
+    ui: &mut egui::Ui,
+    raw: &str,
+    text_col: Color32,
+    pal: &ThemePalette,
+    textures: &HashMap<String, TextureHandle>,
+    loading: &mut HashSet<String>,
+    mentions: Option<&[String]>,
+) {
+    let enabled = ui
+        .ctx()
+        .data(|d| d.get_temp::<(bool, bool)>(Id::new("markdown-options")))
+        .unwrap_or((true, true))
+        .0;
+    if !enabled {
+        ui.add(
+            egui::Label::new(RichText::new(raw).color(text_col))
+                .selectable(true)
+                .wrap(),
+        );
+        return;
+    }
+    for block in split_md_blocks(raw) {
+        match block {
+            MdBlock::Code { lang, body } => {
+                egui::Frame::none()
+                    .fill(pal.bg_input)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(if lang.is_empty() { "code" } else { &lang });
+                            if ui.small_button("Sao chép").clicked() {
+                                ui.output_mut(|o| o.copied_text = body.clone());
+                            }
+                        });
+                        ui.add(
+                            egui::Label::new(RichText::new(body).monospace().color(text_col))
+                                .selectable(true)
+                                .wrap(),
+                        );
+                    });
+            }
+            MdBlock::Table { headers, rows } => {
+                let max = (ui.available_width() / headers.len().max(1) as f32 - 8.0).max(36.0);
+                ui.push_id(ui.next_auto_id(), |ui| {
+                    egui::ScrollArea::horizontal().show(ui, |ui| {
+                        egui::Grid::new("markdown-table")
+                            .striped(true)
+                            .max_col_width(max)
+                            .show(ui, |ui| {
+                                for header in headers {
+                                    ui.label(RichText::new(header).strong().color(text_col));
+                                }
+                                ui.end_row();
+                                for row in rows {
+                                    for cell in row {
+                                        render_markdown_inline_rich(
+                                            ui, &cell, 13.5, text_col, pal, textures, loading,
+                                            mentions,
+                                        );
+                                    }
+                                    ui.end_row();
+                                }
+                            })
+                    })
+                });
+            }
+            MdBlock::Lines(lines) => {
+                if lines
+                    .first()
+                    .is_some_and(|line| line.trim_start().starts_with("```"))
+                {
+                    ui.monospace(lines.join("\n"));
+                    continue;
+                }
+                for line in lines {
+                    if let Some((num, indent, body)) = parse_ordered_item(&line) {
+                        ui.horizontal(|ui| {
+                            ui.add_space((indent as f32 * 4.0).min(40.0));
+                            ui.label(format!("{num}."));
+                            render_markdown_inline_rich(
+                                ui, &body, 15.0, text_col, pal, textures, loading, mentions,
+                            );
+                        });
+                    } else {
+                        render_markdown_lines(
+                            ui, &line, text_col, pal, textures, loading, mentions,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn render_markdown_lines(
     ui: &mut egui::Ui,
     raw: &str,
     text_col: Color32,
@@ -1903,6 +2197,95 @@ pub(super) fn same_message_cluster(a: &ChatMessage, b: &ChatMessage) -> bool {
         return false;
     }
     true
+}
+
+/// Whether a file-card message is a Zalo video (poster card with inline playback).
+fn is_video_card(msg: &ChatMessage, trimmed_text: &str) -> bool {
+    msg.link_src.as_deref() == Some("Video Zalo") || trimmed_text.starts_with("[Video]")
+}
+
+/// Maximum poster width when the source dimensions are not available yet.
+fn video_card_width(max_text_width: f32) -> f32 {
+    max_text_width.min(340.0).max(1.0).floor()
+}
+
+fn video_card_size(max_text_width: f32, texture_size: Option<[usize; 2]>) -> Vec2 {
+    let max_width = video_card_width(max_text_width);
+    let Some([width, height]) = texture_size.filter(|[width, height]| *width > 0 && *height > 0)
+    else {
+        return Vec2::new(max_width, max_width * 9.0 / 16.0);
+    };
+    let source_width = width as f32;
+    let source_height = height as f32;
+    let scale = (max_width / source_width)
+        .min(360.0 / source_height)
+        .min(1.0);
+    Vec2::new(source_width * scale, source_height * scale)
+}
+
+fn message_duration_seconds(msg: &ChatMessage) -> Option<f32> {
+    msg.history_source
+        .as_ref()
+        .and_then(|source| source.get("duration_seconds"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map(|seconds| seconds as f32)
+}
+
+fn voice_waveform_bars(message_id: &str, count: usize) -> Vec<f32> {
+    let mut state = message_id.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+    });
+    (0..count)
+        .map(|index| {
+            state ^= (index as u32).wrapping_mul(0x9e37_79b9);
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            0.2 + (state % 801) as f32 / 1000.0
+        })
+        .collect()
+}
+
+fn pause_icon_rects(center: Pos2, size: f32) -> [Rect; 2] {
+    let height = size.max(4.0);
+    let width = (height * 0.22).max(2.0);
+    let gap = (height * 0.22).max(2.0);
+    let offset = (width + gap) * 0.5;
+    [
+        Rect::from_center_size(center - Vec2::new(offset, 0.0), Vec2::new(width, height)),
+        Rect::from_center_size(center + Vec2::new(offset, 0.0), Vec2::new(width, height)),
+    ]
+}
+
+fn paint_playback_icon(
+    painter: &egui::Painter,
+    center: Pos2,
+    size: f32,
+    playing: bool,
+    color: Color32,
+) {
+    if playing {
+        for bar in pause_icon_rects(center, size) {
+            painter.rect_filled(bar, Rounding::same(1.0), color);
+        }
+    } else {
+        let half = size * 0.52;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                Pos2::new(center.x - half * 0.55, center.y - half),
+                Pos2::new(center.x - half * 0.55, center.y + half),
+                Pos2::new(center.x + half * 0.8, center.y),
+            ],
+            color,
+            Stroke::NONE,
+        ));
+    }
+}
+
+fn is_voice_message(msg: &ChatMessage) -> bool {
+    msg.kind == crate::message_model::MessageKind::Voice
+        || msg.link_src.as_deref() == Some("Thoại Zalo")
 }
 
 pub(super) fn render_message_body(
@@ -2163,11 +2546,111 @@ pub(super) fn render_message_body(
             return body_action;
         }
     }
+    if is_voice_message(msg) {
+        let duration = message_duration_seconds(msg).unwrap_or(0.0);
+        let elapsed = crate::video_player::active_audio_elapsed(&msg.id)
+            .map(|elapsed| elapsed.as_secs_f32())
+            .unwrap_or(0.0);
+        let is_playing =
+            crate::video_player::active_audio_message().as_deref() == Some(msg.id.as_str());
+        let progress = media_progress_fraction(elapsed, duration);
+        let card_size = Vec2::new(max_text_width.min(292.0).max(210.0), 62.0);
+        let (rect, response) = ui.allocate_exact_size(card_size, Sense::click());
+        let play_center = Pos2::new(rect.left() + 22.0, rect.center().y);
+        ui.painter().circle_filled(
+            play_center,
+            17.0,
+            if outgoing {
+                Color32::WHITE
+            } else {
+                pal.primary
+            },
+        );
+        paint_playback_icon(
+            ui.painter(),
+            play_center + Vec2::new(if is_playing { 0.0 } else { 1.0 }, 0.0),
+            14.0,
+            is_playing,
+            if outgoing {
+                pal.primary
+            } else {
+                Color32::WHITE
+            },
+        );
+
+        let waveform_left = rect.left() + 48.0;
+        let waveform_right = rect.right() - 10.0;
+        let waveform_center_y = rect.top() + 23.0;
+        let bars = voice_waveform_bars(&msg.id, 34);
+        let step = (waveform_right - waveform_left) / bars.len() as f32;
+        for (index, height) in bars.iter().enumerate() {
+            let x = waveform_left + (index as f32 + 0.5) * step;
+            let bar_height = 4.0 + height * 16.0;
+            let played = (index as f32 + 0.5) / bars.len() as f32 <= progress;
+            let color = if played {
+                if outgoing {
+                    Color32::WHITE
+                } else {
+                    pal.primary
+                }
+            } else {
+                text_col.linear_multiply(0.36)
+            };
+            ui.painter().line_segment(
+                [
+                    Pos2::new(x, waveform_center_y - bar_height * 0.5),
+                    Pos2::new(x, waveform_center_y + bar_height * 0.5),
+                ],
+                Stroke::new(1.6_f32, color),
+            );
+        }
+        let clock = if is_playing { elapsed } else { duration };
+        ui.painter().text(
+            Pos2::new(waveform_left, rect.bottom() - 8.0),
+            egui::Align2::LEFT_BOTTOM,
+            format_media_clock(clock),
+            FontId::proportional(11.0),
+            meta_col,
+        );
+        ui.painter().text(
+            Pos2::new(waveform_right, rect.bottom() - 8.0),
+            egui::Align2::RIGHT_BOTTOM,
+            "☁",
+            FontId::proportional(11.0),
+            meta_col,
+        );
+        if is_playing {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if response
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text(if is_playing {
+                "Dừng phát"
+            } else {
+                "Phát ghi âm"
+            })
+            .clicked()
+        {
+            if let Some(url) = msg.link_url.as_deref() {
+                return Some(if is_playing {
+                    BubbleAction::StopVoice {
+                        message_id: msg.id.clone(),
+                    }
+                } else {
+                    BubbleAction::OpenVoice {
+                        url: url.to_owned(),
+                        message_id: msg.id.clone(),
+                    }
+                });
+            }
+        }
+        return None;
+    }
     // Dedicated File / Video Attachment Card (#74)
     let is_zalo_file_or_video = is_zalo_file_or_video_message(msg);
     if is_zalo_file_or_video {
-        let is_vid =
-            msg.link_src.as_deref() == Some("Video Zalo") || trimmed_text.starts_with("[Video]");
+        let is_vid = is_video_card(msg, trimmed_text);
         let url_str = msg.link_url.as_deref().unwrap_or_default();
         let resolved_file_name = crate::chat::resolve_attachment_file_name(
             msg.link_title.as_deref(),
@@ -2175,14 +2658,97 @@ pub(super) fn render_message_body(
             url_str,
         );
         let title_str = if is_vid {
-            msg.link_title
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(trimmed_text)
-                .to_string()
+            video_display_title(msg.link_title.as_deref(), trimmed_text)
         } else {
             resolved_file_name.clone()
         };
+        if is_vid {
+            let poster = msg
+                .link_thumb
+                .as_deref()
+                .filter(|url| crate::session::is_trusted_zalo_url(url));
+            let poster_key =
+                poster.map(|url| format!("video_thumb_{}", crate::crypto::md5_hex(url)));
+            if let (Some(url), Some(key)) = (poster, poster_key.as_ref()) {
+                if !sticker_textures.contains_key(key) && loading_stickers.insert(key.clone()) {
+                    if let Some(tx) = WORKER_TX.get() {
+                        let _ = tx.send(WorkerCmd::FetchStickerImage {
+                            key: key.clone(),
+                            url: url.to_string(),
+                        });
+                    }
+                }
+            }
+
+            // Must equal the width `message_bubble` reserved (`video_card_width`), or the poster
+            // overflows its frame and outgoing bubbles drift right.
+            let texture = poster_key
+                .as_deref()
+                .and_then(|key| sticker_textures.get(key));
+            let card_size = video_card_size(max_text_width, texture.map(|texture| texture.size()));
+            let (rect, response) = ui.allocate_exact_size(card_size, Sense::click());
+            ui.painter()
+                .rect_filled(rect, Rounding::same(8.0), pal.bg_input);
+            if let Some(texture) = texture {
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            } else {
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    lucide::VIDEO,
+                    FontId::proportional(36.0),
+                    pal.text_muted,
+                );
+            }
+            ui.painter()
+                .circle_filled(rect.center(), 25.0, Color32::from_black_alpha(180));
+            ui.painter().text(
+                rect.center() + Vec2::new(2.0, 0.0),
+                egui::Align2::CENTER_CENTER,
+                "▶",
+                FontId::proportional(24.0),
+                Color32::WHITE,
+            );
+            if let Some(duration) = message_duration_seconds(msg).filter(|duration| *duration > 0.0)
+            {
+                let badge = Rect::from_min_size(
+                    rect.left_top() + Vec2::new(8.0, 8.0),
+                    Vec2::new(49.0, 22.0),
+                );
+                ui.painter().rect_filled(
+                    badge,
+                    Rounding::same(11.0),
+                    Color32::from_black_alpha(165),
+                );
+                ui.painter().text(
+                    badge.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format_media_clock(duration),
+                    FontId::proportional(11.0),
+                    Color32::WHITE,
+                );
+            }
+            if response
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_text("Phát video")
+                .clicked()
+            {
+                if let Some(url) = msg.link_url.as_deref().filter(|url| !url.is_empty()) {
+                    return Some(BubbleAction::OpenVideo {
+                        url: url.to_string(),
+                        file_name: title_str,
+                        message_id: msg.id.clone(),
+                        duration_seconds: message_duration_seconds(msg),
+                    });
+                }
+            }
+            return None;
+        }
         let sub_str = if is_vid {
             "Video đính kèm · Bấm để mở"
         } else {
@@ -2217,6 +2783,16 @@ pub(super) fn render_message_body(
                     .sense(Sense::click()),
             )
             .on_hover_cursor(CursorIcon::PointingHand);
+        if !is_vid
+            && crate::doc_preview::supports(&resolved_file_name)
+            && ui.small_button("Xem trước nội dung").clicked()
+            && !url_str.is_empty()
+        {
+            return Some(BubbleAction::PreviewDoc {
+                url: url_str.to_owned(),
+                file_name: resolved_file_name.clone(),
+            });
+        }
         if resp.clicked() || dom_resp.clicked() {
             if let Some(url) = msg.link_url.as_deref().filter(|u| !u.is_empty()) {
                 if is_vid && !url.to_ascii_lowercase().contains("/renewmedia") {
@@ -2447,6 +3023,31 @@ pub(super) fn is_zalo_file_or_video_message(msg: &ChatMessage) -> bool {
             .is_some_and(|u| u.to_ascii_lowercase().contains("/renewmedia"))
 }
 
+fn video_display_title(title: Option<&str>, fallback: &str) -> String {
+    let candidate = title.unwrap_or(fallback).trim();
+    let lower = candidate.to_ascii_lowercase();
+    let has_video_extension = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]
+        .iter()
+        .any(|extension| lower.ends_with(extension));
+    let looks_opaque = candidate.len() >= 20
+        && !candidate.contains(char::is_whitespace)
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if candidate.is_empty()
+        || candidate.eq_ignore_ascii_case("tap_tin_zalo")
+        || (looks_opaque && !has_video_extension)
+    {
+        "Video Zalo".to_string()
+    } else {
+        candidate
+            .strip_prefix("[Video]")
+            .map(str::trim)
+            .unwrap_or(candidate)
+            .to_string()
+    }
+}
+
 pub(super) fn photo_primary_url(msg: &ChatMessage) -> Option<&str> {
     if let Some(th) = msg
         .link_thumb
@@ -2585,10 +3186,12 @@ pub(super) fn render_chat_bubble(
     let call_card_opt = extract_call_card_view(msg);
     let is_call_card = call_card_opt.is_some();
     let is_photo_card = !has_sticker && is_zalo_photo_message(msg);
+    let has_voice_card = !has_sticker && is_voice_message(msg);
     let is_file_card = !has_sticker && is_zalo_file_or_video_message(msg);
     let has_link_card =
         !has_sticker && !is_photo_card && !is_file_card && extract_message_link_view(msg).is_some();
-    let has_interactive_card = is_call_card || has_link_card || is_photo_card || is_file_card;
+    let has_interactive_card =
+        is_call_card || has_link_card || is_photo_card || has_voice_card || is_file_card;
 
     let show_timestamp = !msg.time.is_empty()
         && (!next_same_sender
@@ -2619,6 +3222,8 @@ pub(super) fn render_chat_bubble(
         116.0_f32
     } else if is_call_card {
         max_text_width.min(256.0)
+    } else if has_voice_card {
+        max_text_width.min(292.0).max(210.0)
     } else if is_photo_card {
         let thumb_u = photo_primary_url(msg).unwrap_or("");
         let tkey = format!("thumb_{}", crate::crypto::md5_hex(thumb_u));
@@ -2652,6 +3257,17 @@ pub(super) fn render_chat_bubble(
         } else {
             photo_w
         }
+    } else if is_file_card && is_video_card(msg, msg.text.trim()) {
+        let poster = msg
+            .link_thumb
+            .as_deref()
+            .filter(|url| crate::session::is_trusted_zalo_url(url));
+        let texture_size = poster
+            .map(|url| format!("video_thumb_{}", crate::crypto::md5_hex(url)))
+            .as_deref()
+            .and_then(|key| sticker_textures.get(key))
+            .map(|texture| texture.size());
+        video_card_size(max_text_width, texture_size).x
     } else if is_file_card || has_link_card {
         let has_loaded_thumb = msg
             .link_thumb
@@ -2696,7 +3312,7 @@ pub(super) fn render_chat_bubble(
                 .max(measure(desc, 12.3))
                 .max(measure(&dom, 12.6))
                 + 8.0;
-            w.clamp(135.0, max_text_width.min(340.0)).ceil()
+            clamp_width(w, 135.0, max_text_width.min(340.0)).ceil()
         }
     } else {
         let display_str = if msg.text.trim() == "[Tin nhắn đã thu hồi]" {
@@ -3111,9 +3727,26 @@ pub(super) enum BubbleAction {
         sender: String,
         time: String,
     },
+    PreviewDoc {
+        url: String,
+        file_name: String,
+    },
     DownloadFile {
         url: String,
         file_name: String,
+    },
+    OpenVideo {
+        url: String,
+        file_name: String,
+        message_id: String,
+        duration_seconds: Option<f32>,
+    },
+    OpenVoice {
+        url: String,
+        message_id: String,
+    },
+    StopVoice {
+        message_id: String,
     },
 }
 
@@ -4015,8 +4648,69 @@ pub(super) fn render_reactions(
 }
 
 #[cfg(test)]
+mod video_message_tests {
+    use super::*;
+
+    #[test]
+    fn opaque_video_storage_key_is_not_shown_as_a_filename() {
+        assert_eq!(
+            video_display_title(Some("2aOboRC8rIEyZT9qpcfwkwN2jLLpgIqPFNg3mlro"), "[Video]"),
+            "Video Zalo"
+        );
+        assert_eq!(
+            video_display_title(Some("Ky_niem_lop.mp4"), "[Video]"),
+            "Ky_niem_lop.mp4"
+        );
+    }
+
+    #[test]
+    fn video_card_size_preserves_landscape_and_portrait_posters() {
+        let landscape = video_card_size(500.0, Some([1_920, 1_080]));
+        assert_eq!(landscape, Vec2::new(340.0, 191.25));
+
+        let portrait = video_card_size(500.0, Some([1_080, 1_920]));
+        assert_eq!(portrait, Vec2::new(202.5, 360.0));
+        assert!(portrait.x < portrait.y);
+
+        let missing = video_card_size(180.0, None);
+        assert_eq!(missing, Vec2::new(180.0, 101.25));
+    }
+
+    #[test]
+    fn voice_waveform_and_clock_are_bounded_and_deterministic() {
+        let bars = voice_waveform_bars("voice-message-1", 28);
+        assert_eq!(bars.len(), 28);
+        assert!(bars.iter().all(|height| (0.2..=1.0).contains(height)));
+        assert_eq!(bars, voice_waveform_bars("voice-message-1", 28));
+        assert_ne!(bars, voice_waveform_bars("voice-message-2", 28));
+        assert_eq!(format_media_clock(65.9), "01:05");
+        assert_eq!(media_progress_fraction(7.0, 16.0), 0.4375);
+        assert_eq!(media_progress_fraction(20.0, 16.0), 1.0);
+        assert_eq!(media_progress_fraction(2.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn pause_icon_bars_are_vertically_centered_as_geometry_not_font_glyphs() {
+        let center = Pos2::new(80.0, 42.0);
+        let [left, right] = pause_icon_rects(center, 14.0);
+        assert_eq!(left.center().y, center.y);
+        assert_eq!(right.center().y, center.y);
+        assert_eq!((left.center().x + right.center().x) * 0.5, center.x);
+        assert_eq!(left.height(), 14.0);
+        assert!(left.right() < right.left());
+    }
+}
+
+#[cfg(test)]
 mod quote_navigation_tests {
     use super::*;
+
+    #[test]
+    fn video_card_width_never_exceeds_the_bubble_allowance() {
+        assert_eq!(video_card_width(500.0), 340.0);
+        assert_eq!(video_card_width(180.0), 180.0);
+        assert!(video_card_width(0.0) >= 1.0);
+    }
 
     #[test]
     fn quote_navigation_bubble_propagates_action_for_both_directions() {
@@ -4553,5 +5247,69 @@ mod reaction_tooltip_tests {
             reaction_tooltip_lines(&anon, 5, &name, 8),
             vec!["5 lượt thả cảm xúc"]
         );
+    }
+}
+
+#[cfg(test)]
+mod md_block_tests {
+    use super::*;
+
+    #[test]
+    fn splits_code_fence_with_lang() {
+        let blocks = split_md_blocks("hello\n```rust\nlet x = 1;\nlet y = 2;\n```\nbye");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0], MdBlock::Lines(l) if l == &vec!["hello".to_string()]));
+        match &blocks[1] {
+            MdBlock::Code { lang, body } => {
+                assert_eq!(lang, "rust");
+                assert!(body.contains("let x = 1;") && body.contains("let y = 2;"));
+            }
+            other => panic!("expected code, got {other:?}"),
+        }
+        assert!(matches!(&blocks[2], MdBlock::Lines(l) if l == &vec!["bye".to_string()]));
+    }
+
+    #[test]
+    fn unterminated_fence_keeps_content_as_text() {
+        let blocks = split_md_blocks("```py\nprint(1)");
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            MdBlock::Lines(l) => assert!(l.iter().any(|s| s.contains("print(1)"))),
+            other => panic!("expected lines fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_table_and_rejects_col_mismatch() {
+        let good = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+        match &split_md_blocks(good)[..] {
+            [MdBlock::Table { headers, rows }] => {
+                assert_eq!(headers, &vec!["a".to_string(), "b".to_string()]);
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0], vec!["1".to_string(), "2".to_string()]);
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+        let bad_sep = "| a | b |\n| xxx | yyy |\n| 1 | 2 |";
+        assert!(matches!(&split_md_blocks(bad_sep)[..], [MdBlock::Lines(_)]));
+        let mismatch = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 |";
+        let blocks = split_md_blocks(mismatch);
+        assert!(matches!(&blocks[0], MdBlock::Table { rows, .. } if rows.len() == 1));
+        assert!(matches!(&blocks[1], MdBlock::Lines(_)));
+    }
+
+    #[test]
+    fn parses_ordered_list_items() {
+        assert_eq!(
+            parse_ordered_item("1. mua sữa"),
+            Some(("1".to_string(), 0, "mua sữa".to_string()))
+        );
+        assert_eq!(
+            parse_ordered_item("  12. indent"),
+            Some(("12".to_string(), 2, "indent".to_string()))
+        );
+        assert_eq!(parse_ordered_item("- bullet"), None);
+        assert_eq!(parse_ordered_item("1.missing space"), None);
+        assert_eq!(parse_ordered_item("1234. too long"), None);
     }
 }

@@ -1,5 +1,108 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy)]
+struct VideoViewerLayout {
+    header: Rect,
+    media: Rect,
+    close_button: Rect,
+    play_button: Rect,
+    current: Rect,
+    seek: Rect,
+    duration: Rect,
+    volume_icon: Rect,
+    volume_slider: Rect,
+}
+
+fn video_viewer_layout(screen: Rect) -> VideoViewerLayout {
+    let margin = if screen.width() < 560.0 { 12.0 } else { 18.0 };
+    let inner = screen.shrink(margin);
+    let header = Rect::from_min_max(
+        inner.min,
+        Pos2::new(inner.right(), (inner.top() + 40.0).min(inner.bottom())),
+    );
+    let controls_height = 36.0_f32.min(inner.height());
+    let controls = Rect::from_min_max(
+        Pos2::new(inner.left(), inner.bottom() - controls_height),
+        inner.max,
+    );
+    let media_top = (header.bottom() + 8.0).min(controls.top());
+    let media_bottom = (controls.top() - 10.0).max(media_top);
+    let media = Rect::from_min_max(
+        Pos2::new(inner.left(), media_top),
+        Pos2::new(inner.right(), media_bottom),
+    );
+
+    let close_button = Rect::from_center_size(
+        Pos2::new(header.right() - 17.0, header.center().y),
+        Vec2::splat(34.0),
+    );
+    let play_button = Rect::from_min_size(controls.min, Vec2::new(34.0, controls.height()));
+    let current = Rect::from_min_size(
+        Pos2::new(play_button.right() + 6.0, controls.top()),
+        Vec2::new(44.0, controls.height()),
+    );
+
+    let slider_width = (controls.width() * 0.12).clamp(64.0, 96.0);
+    let volume_slider = Rect::from_min_max(
+        Pos2::new(controls.right() - slider_width, controls.top()),
+        controls.max,
+    );
+    let volume_icon = Rect::from_min_size(
+        Pos2::new(volume_slider.left() - 30.0, controls.top()),
+        Vec2::new(24.0, controls.height()),
+    );
+    let duration = Rect::from_min_size(
+        Pos2::new(volume_icon.left() - 50.0, controls.top()),
+        Vec2::new(44.0, controls.height()),
+    );
+    let seek = Rect::from_min_max(
+        Pos2::new(current.right() + 8.0, controls.top()),
+        Pos2::new(
+            (duration.left() - 8.0).max(current.right() + 72.0),
+            controls.bottom(),
+        ),
+    );
+
+    VideoViewerLayout {
+        header,
+        media,
+        close_button,
+        play_button,
+        current,
+        seek,
+        duration,
+        volume_icon,
+        volume_slider,
+    }
+}
+
+fn contain_media_rect(container: Rect, source: Vec2) -> Rect {
+    if container.width() <= 0.0 || container.height() <= 0.0 || source.x <= 0.0 || source.y <= 0.0 {
+        return Rect::from_center_size(container.center(), Vec2::ZERO);
+    }
+    let scale = (container.width() / source.x).min(container.height() / source.y);
+    Rect::from_center_size(container.center(), source * scale)
+}
+
+fn restart_video_player(player: &mut VideoPlayerModal) {
+    player.generation = next_video_generation();
+    player.playing = true;
+    player.finished = false;
+    player.started_at = None;
+    player.status = "Đang chuẩn bị video…".into();
+    if let Some(tx) = WORKER_TX.get() {
+        let _ = tx.send(WorkerCmd::StartVideo {
+            account: player.account.clone(),
+            thread: player.thread.clone(),
+            message: player.message.clone(),
+            generation: player.generation,
+            url: player.url.clone(),
+            start_at_seconds: player.position_seconds,
+            volume: player.volume,
+        });
+    }
+}
+
 fn canonical_download_dir(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     std::fs::canonicalize(path).and_then(|resolved| {
         if resolved.is_absolute() {
@@ -201,6 +304,19 @@ pub(crate) fn compute_call_per_page(stage_w: f32) -> usize {
     (cols * 2).max(2)
 }
 
+/// Latest activity of a thread in milliseconds, from loaded messages or the sidebar snapshot.
+fn forward_recency_ms(thread: &Thread) -> i64 {
+    let loaded = thread
+        .messages
+        .iter()
+        .map(|m| crate::clock::normalize_ts_ms(m.ts))
+        .max()
+        .unwrap_or(0);
+    loaded.max(crate::clock::normalize_ts_ms(
+        thread.presentation.last_message_ts,
+    ))
+}
+
 impl ZaloGuiApp {
     pub(super) fn render_profile_popover(&mut self, ctx: &egui::Context, pal: &ThemePalette) {
         if !self.profile_menu_open {
@@ -312,8 +428,7 @@ impl ZaloGuiApp {
                             .on_hover_cursor(CursorIcon::PointingHand)
                             .clicked()
                         {
-                            self.dark_mode = !self.dark_mode;
-                            self.theme_dirty = true;
+                            self.set_theme(!self.dark_mode);
                             close_menu = true;
                         }
                         let has_upd = self
@@ -472,6 +587,7 @@ impl ZaloGuiApp {
         }
 
         if do_logout {
+            self.flush_local_draft();
             self.is_logged_in = false;
             self.user_name.clear();
             self.user_uin.clear();
@@ -536,6 +652,284 @@ impl ZaloGuiApp {
                         });
                     });
             });
+    }
+
+    pub(super) fn render_video_player_modal(&mut self, ctx: &egui::Context, _pal: &ThemePalette) {
+        enum VideoAction {
+            Close,
+            TogglePlayback,
+            Seek(f32),
+        }
+
+        let Some(player) = self.video_player.as_mut() else {
+            return;
+        };
+        let elapsed = player
+            .started_at
+            .filter(|_| player.playing)
+            .map(|started| started.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
+        let current =
+            video_position_seconds(player.position_seconds, elapsed, player.duration_seconds);
+        let mut action = ctx
+            .input(|input| input.key_pressed(Key::Escape))
+            .then_some(VideoAction::Close);
+        let screen = ctx.screen_rect();
+        let layout = video_viewer_layout(screen);
+        egui::Area::new(Id::new("zalo_inline_video_player"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                ui.set_min_size(screen.size());
+                let painter = ui.painter();
+                painter.rect_filled(screen, Rounding::ZERO, Color32::from_rgb(9, 12, 18));
+                painter.text(
+                    layout.header.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &player.title,
+                    FontId::proportional(14.0),
+                    Color32::WHITE,
+                );
+
+                let close = ui
+                    .interact(
+                        layout.close_button,
+                        Id::new("zalo_video_close"),
+                        Sense::click(),
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .on_hover_text("Đóng");
+                painter.text(
+                    layout.close_button.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "×",
+                    FontId::proportional(25.0),
+                    Color32::WHITE,
+                );
+                if close.clicked() {
+                    action = Some(VideoAction::Close);
+                }
+
+                if let Some(texture) = player.texture.as_ref() {
+                    let [source_width, source_height] = texture.size();
+                    let source = Vec2::new(source_width.max(1) as f32, source_height.max(1) as f32);
+                    let image_rect = contain_media_rect(layout.media, source);
+                    painter.image(
+                        texture.id(),
+                        image_rect,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                } else {
+                    painter.text(
+                        layout.media.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &player.status,
+                        FontId::proportional(12.5),
+                        Color32::LIGHT_GRAY,
+                    );
+                    if !player.finished {
+                        let loading_width = (layout.media.width() * 0.28).clamp(100.0, 280.0);
+                        let loading = Rect::from_center_size(
+                            layout.media.center() + Vec2::new(0.0, 28.0),
+                            Vec2::new(loading_width, 3.0),
+                        );
+                        painter.rect_filled(
+                            loading,
+                            Rounding::same(2.0),
+                            Color32::from_white_alpha(45),
+                        );
+                        painter.rect_filled(
+                            Rect::from_min_max(
+                                loading.min,
+                                Pos2::new(
+                                    loading.left() + loading.width() * player.progress,
+                                    loading.bottom(),
+                                ),
+                            ),
+                            Rounding::same(2.0),
+                            Color32::from_rgb(25, 132, 255),
+                        );
+                    }
+                }
+
+                let play_response = ui
+                    .interact(
+                        layout.play_button,
+                        Id::new("zalo_video_play_pause"),
+                        Sense::click(),
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .on_hover_text(if player.playing {
+                        "Tạm dừng"
+                    } else {
+                        "Tiếp tục phát"
+                    });
+                let control_center = layout.play_button.center();
+                if player.playing {
+                    let bar_size = Vec2::new(3.0, 16.0);
+                    painter.rect_filled(
+                        Rect::from_center_size(control_center - Vec2::new(3.5, 0.0), bar_size),
+                        Rounding::same(1.0),
+                        Color32::WHITE,
+                    );
+                    painter.rect_filled(
+                        Rect::from_center_size(control_center + Vec2::new(3.5, 0.0), bar_size),
+                        Rounding::same(1.0),
+                        Color32::WHITE,
+                    );
+                } else {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            control_center + Vec2::new(-5.0, -8.0),
+                            control_center + Vec2::new(-5.0, 8.0),
+                            control_center + Vec2::new(8.0, 0.0),
+                        ],
+                        Color32::WHITE,
+                        Stroke::NONE,
+                    ));
+                }
+                if play_response.clicked() {
+                    action = Some(VideoAction::TogglePlayback);
+                }
+
+                painter.text(
+                    layout.current.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format_media_clock(current),
+                    FontId::proportional(12.0),
+                    Color32::WHITE,
+                );
+                painter.text(
+                    layout.duration.center(),
+                    egui::Align2::CENTER_CENTER,
+                    player
+                        .duration_seconds
+                        .map(format_media_clock)
+                        .unwrap_or_else(|| "--:--".into()),
+                    FontId::proportional(12.0),
+                    Color32::WHITE,
+                );
+
+                let seek_response = ui.interact(
+                    layout.seek,
+                    Id::new("zalo_video_seek"),
+                    Sense::click_and_drag(),
+                );
+                let rail = Rect::from_center_size(
+                    layout.seek.center(),
+                    Vec2::new(layout.seek.width(), 3.0),
+                );
+                painter.rect_filled(rail, Rounding::same(2.0), Color32::from_white_alpha(70));
+                let fraction = player
+                    .duration_seconds
+                    .map(|duration| media_progress_fraction(current, duration))
+                    .unwrap_or(0.0);
+                let played = Rect::from_min_max(
+                    rail.min,
+                    Pos2::new(rail.left() + rail.width() * fraction, rail.bottom()),
+                );
+                painter.rect_filled(played, Rounding::same(2.0), Color32::from_rgb(25, 132, 255));
+                painter.circle_filled(
+                    Pos2::new(played.right(), rail.center().y),
+                    5.0,
+                    Color32::WHITE,
+                );
+                if (seek_response.clicked() || seek_response.drag_stopped())
+                    && player.duration_seconds.is_some()
+                {
+                    if let (Some(pointer), Some(duration)) = (
+                        seek_response.interact_pointer_pos(),
+                        player.duration_seconds,
+                    ) {
+                        let fraction = ((pointer.x - rail.left()) / rail.width()).clamp(0.0, 1.0);
+                        action = Some(VideoAction::Seek(duration * fraction));
+                    }
+                }
+
+                painter.text(
+                    layout.volume_icon.center(),
+                    egui::Align2::CENTER_CENTER,
+                    if player.volume <= 0.01 {
+                        "🔇"
+                    } else {
+                        "🔊"
+                    },
+                    FontId::proportional(14.0),
+                    Color32::WHITE,
+                );
+                ui.allocate_new_ui(
+                    egui::UiBuilder::new().max_rect(layout.volume_slider),
+                    |ui| {
+                        ui.centered_and_justified(|ui| {
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut player.volume, 0.0..=1.0)
+                                        .show_value(false)
+                                        .trailing_fill(true),
+                                )
+                                .changed()
+                            {
+                                if let Some(tx) = WORKER_TX.get() {
+                                    let _ = tx.send(WorkerCmd::SetVideoVolume {
+                                        generation: player.generation,
+                                        volume: player.volume,
+                                    });
+                                }
+                            }
+                        });
+                    },
+                );
+            });
+
+        if player.playing {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        let mut close = false;
+        match action {
+            Some(VideoAction::Close) => close = true,
+            Some(VideoAction::TogglePlayback) if player.playing => {
+                player.position_seconds = current;
+                player.started_at = None;
+                player.playing = false;
+                player.finished = false;
+                player.status = "Tạm dừng".into();
+                if let Some(tx) = WORKER_TX.get() {
+                    let _ = tx.send(WorkerCmd::StopVideo {
+                        generation: player.generation,
+                    });
+                }
+            }
+            Some(VideoAction::TogglePlayback) => {
+                if player.finished
+                    || player
+                        .duration_seconds
+                        .is_some_and(|duration| player.position_seconds >= duration)
+                {
+                    player.position_seconds = 0.0;
+                }
+                restart_video_player(player);
+            }
+            Some(VideoAction::Seek(position)) => {
+                if let Some(tx) = WORKER_TX.get() {
+                    let _ = tx.send(WorkerCmd::StopVideo {
+                        generation: player.generation,
+                    });
+                }
+                player.position_seconds = position;
+                restart_video_player(player);
+            }
+            None => {}
+        }
+
+        if close {
+            let generation = player.generation;
+            if let Some(tx) = WORKER_TX.get() {
+                let _ = tx.send(WorkerCmd::StopVideo { generation });
+            }
+            self.video_player = None;
+        }
     }
 
     pub(super) fn render_phone_lookup_modal(&mut self, ctx: &egui::Context, pal: &ThemePalette) {
@@ -1285,6 +1679,18 @@ impl ZaloGuiApp {
                                                 });
                                             ui.add_space(14.0);
 
+                                            if let Some(action) = video_tools_ui::render(ui, &pal, &self.video_tools_status,
+                                                self.video_tools_busy.then_some(self.video_tools_progress), crate::video_tools::available()) {
+                                                match action {
+                                                    video_tools_ui::Action::Install => self.install_video_tools(),
+                                                    video_tools_ui::Action::Cancel => crate::video_tools::CANCEL_INSTALL.store(true, std::sync::atomic::Ordering::Relaxed),
+                                                    video_tools_ui::Action::Refresh => {
+                                                        self.video_tools_status = "Đang kiểm tra công cụ gọi video…".into();
+                                                        if let Some(tx) = WORKER_TX.get() { let _ = tx.send(WorkerCmd::RefreshVideoTools); }
+                                                    }
+                                                }
+                                            }
+                                            ui.add_space(14.0);
                                             ui.label(RichText::new("Thiết bị Âm thanh & Video (Cuộc gọi)").color(pal.text_primary).size(13.5).strong());
                                             ui.add_space(6.0);
                                             egui::Frame::none()
@@ -1293,7 +1699,7 @@ impl ZaloGuiApp {
                                                 .rounding(Rounding::same(8.0))
                                                 .inner_margin(Margin::symmetric(14.0, 10.0))
                                                 .show(ui, |ui| {
-                                                    let (mics, cams) = crate::media::list_media_devices(false);
+                                                    let (mics, cams) = crate::media::cached_media_devices();
                                                     ui.horizontal(|ui| {
                                                         ui.label(RichText::new(format!("{} Đầu vào Mic:", lucide::MIC)).color(pal.text_primary).size(13.0));
                                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1392,7 +1798,7 @@ impl ZaloGuiApp {
                                                         }
                                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                             if ui.small_button(format!("{} Quét lại thiết bị", lucide::REFRESH)).clicked() {
-                                                                let _ = crate::media::list_media_devices(true);
+                                                                if let Some(tx) = WORKER_TX.get() { let _ = tx.send(WorkerCmd::RefreshVideoTools); }
                                                             }
                                                         });
                                                     });
@@ -1785,7 +2191,7 @@ impl ZaloGuiApp {
                                                     ui.vertical(|ui| {
                                                         ui.label(
                                                             RichText::new(
-                                                                "Gửi yêu cầu đồng bộ trực tiếp tới ứng dụng Zalo trên điện thoại (pull_mobile_msg / transfer-sync-v2) để kéo toàn bộ tin nhắn 1-1 và nhóm gần đây từ điện thoại về máy tính.",
+                                                                "Chọn loại điện thoại, mở Zalo trên điện thoại và xác nhận yêu cầu đồng bộ khi được hỏi. Tin nhắn chỉ được báo đã đồng bộ sau khi tải và lưu vào máy tính.",
                                                             )
                                                             .color(pal.text_primary)
                                                             .size(13.0),
@@ -1798,6 +2204,18 @@ impl ZaloGuiApp {
                                                             .color(pal.text_secondary)
                                                             .size(12.2),
                                                         );
+                                                        if self.settings.phone_sync_platform.is_none() {
+                                                            ui.label(RichText::new("Chọn loại điện thoại trước khi đồng bộ.").color(pal.text_secondary));
+                                                        }
+                                                        let old_platform = self.settings.phone_sync_platform;
+                                                        ui.add_enabled_ui(!crate::history_sync::PHONE_SYNC_RUNNING.load(std::sync::atomic::Ordering::Relaxed), |ui| {
+                                                            ui.horizontal(|ui| {
+                                                                ui.label("Điện thoại:");
+                                                                ui.selectable_value(&mut self.settings.phone_sync_platform, Some(crate::history_sync::PhonePlatform::Android), "Android");
+                                                                ui.selectable_value(&mut self.settings.phone_sync_platform, Some(crate::history_sync::PhonePlatform::Ios), "iPhone");
+                                                            });
+                                                        });
+                                                        if old_platform != self.settings.phone_sync_platform { self.settings.save(); }
                                                         ui.add_space(10.0);
                                                         if crate::history_sync::PHONE_SYNC_RUNNING
                                                             .load(std::sync::atomic::Ordering::Relaxed)
@@ -2291,6 +2709,8 @@ impl ZaloGuiApp {
                                                 });
                                         }
                                         SettingsTab::Messages => {
+                                            if ui.checkbox(&mut self.settings.render_markdown,"Hiển thị Markdown (mã, bảng, danh sách)").changed() | ui.checkbox(&mut self.settings.zalo_single_star_bold,"Kiểu Zalo: *một sao* là chữ đậm").changed() {self.settings.save();}
+
                                             egui::Frame::none()
                                                 .fill(pal.bg_elevated)
                                                 .stroke(Stroke::new(1.0_f32, pal.border))
@@ -3052,6 +3472,7 @@ impl ZaloGuiApp {
             });
 
         if do_logout {
+            self.flush_local_draft();
             self.settings_modal_open = false;
             self.is_logged_in = false;
             self.user_name.clear();
@@ -3068,14 +3489,16 @@ impl ZaloGuiApp {
             }
         }
         if let Some(target) = switch_to_uin {
+            self.flush_local_draft();
             self.settings_modal_open = false;
             if let Some(tx) = WORKER_TX.get() {
                 let _ = tx.send(WorkerCmd::SwitchAccount { target_uin: target });
             }
         }
         if add_new_account {
+            self.flush_local_draft();
             self.settings_modal_open = false;
-            let _ = crate::account_manager::save_current_account_snapshot(&self.user_uin);
+            // Logout snapshots the active account after queued draft writes, on the worker.
             self.is_logged_in = false;
             self.user_name.clear();
             self.user_uin.clear();
@@ -3091,8 +3514,7 @@ impl ZaloGuiApp {
             }
         }
         if theme_switched {
-            self.theme_dirty = true;
-            self.settings.save();
+            self.set_theme(self.dark_mode);
             self.show_toast(if self.dark_mode {
                 "Đã chuyển sang giao diện Tối (Atom One Dark)"
             } else {
@@ -3113,16 +3535,7 @@ impl ZaloGuiApp {
             self.show_toast(format!("Bắt đầu đồng bộ lịch sử {n} hội thoại nhóm/Cloud…"));
         }
         if trigger_phone_sync {
-            self.phone_sync_progress = 0.05;
-            self.phone_sync_status = "📲 Đang gửi yêu cầu đồng bộ tin nhắn tới điện thoại…".into();
-            let threads = self.threads.clone();
-            if let Some(tx) = WORKER_TX.get() {
-                let _ = tx.send(WorkerCmd::SyncPhoneMessages {
-                    threads,
-                    send_phone_prompt: true,
-                });
-            }
-            self.show_toast("📲 Đang yêu cầu đồng bộ tin nhắn từ điện thoại…");
+            self.start_phone_sync();
             ctx.request_repaint();
         }
         if apply_proxy_now {
@@ -4316,7 +4729,7 @@ impl ZaloGuiApp {
                             pill_fg,
                         );
 
-                        let (mics, cams) = crate::media::list_media_devices(false);
+                        let (mics, cams) = crate::media::cached_media_devices();
 
                         // 2) Microphone selector button + popup menu
                         let cur_mic_lbl = if self.settings.selected_mic_device.is_empty() {
@@ -4506,7 +4919,7 @@ impl ZaloGuiApp {
                             .on_hover_text("Quét lại danh sách Mic & Camera")
                             .clicked()
                         {
-                            let _ = crate::media::list_media_devices(true);
+                            if let Some(tx) = WORKER_TX.get() { let _ = tx.send(WorkerCmd::RefreshVideoTools); }
                         }
                     });
                 });
@@ -5079,10 +5492,8 @@ impl ZaloGuiApp {
                                     {
                                         if !call.cam_enabled {
                                             if !crate::media::is_ffmpeg_available() {
-                                                self.show_toast(
-                                                    "⚠️ Cần cài đặt ffmpeg trong PATH để bật Camera (winget install Gyan.FFmpeg)",
-                                                );
-                                            } else if crate::media::list_media_devices(false).1.is_empty() {
+                                                self.open_video_tools_setup();
+                                            } else if crate::media::cached_media_devices().1.is_empty() {
                                                 self.show_toast(
                                                     "⚠️ Không tìm thấy thiết bị Camera nào trên máy",
                                                 );
@@ -5664,8 +6075,8 @@ impl ZaloGuiApp {
                                     };
 
                                     // Participant Name Badge in bottom-left of tile
-                                    let lbl_w = (p_name.chars().count() as f32 * 7.2 + 34.0)
-                                        .clamp(76.0, tile_rect.width() - 20.0);
+                                    let lbl_w = clamp_width(p_name.chars().count() as f32 * 7.2 + 34.0,
+                                        76.0, tile_rect.width() - 20.0);
                                     let tag_rect = Rect::from_min_size(
                                         Pos2::new(
                                             tile_rect.left() + 10.0,
@@ -6056,7 +6467,7 @@ impl ZaloGuiApp {
         // Candidate conversations for the active tab, filtered by the (accent-insensitive) query.
         let query = crate::chat::strip_vn_for_sticker_kw(self.forward_filter.trim());
         let tab = self.forward_tab;
-        let rows: Vec<(String, String, bool, Option<String>, bool)> = self
+        let mut candidates: Vec<&Thread> = self
             .threads
             .iter()
             .filter(|t| match tab {
@@ -6073,6 +6484,12 @@ impl ZaloGuiApp {
                         self.forward_label_filter.contains(&l.id) && l.contains(&t.id, t.is_group)
                     })
             })
+            .collect();
+        // Most recently active conversations first; the sort is stable so threads without any
+        // activity keep their sidebar order at the end.
+        candidates.sort_by_key(|t| std::cmp::Reverse(forward_recency_ms(t)));
+        let rows: Vec<(String, String, bool, Option<String>, bool)> = candidates
+            .into_iter()
             .take(300)
             .map(|t| {
                 let blocked = t.is_group && t.presentation.posting_restricted == Some(true);
@@ -9175,6 +9592,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn video_viewer_geometry_keeps_image_and_controls_inside_viewport() {
+        for size in [
+            Vec2::new(420.0, 300.0),
+            Vec2::new(1_280.0, 720.0),
+            Vec2::new(1_920.0, 1_080.0),
+        ] {
+            let screen = Rect::from_min_size(Pos2::new(0.0, 0.0), size);
+            let layout = video_viewer_layout(screen);
+            for rect in [
+                layout.header,
+                layout.media,
+                layout.play_button,
+                layout.seek,
+                layout.volume_slider,
+            ] {
+                assert!(screen.contains_rect(rect), "{size:?}: {rect:?}");
+            }
+            assert!(layout.media.width() > 0.0 && layout.media.height() > 0.0);
+            assert!(layout.seek.width() >= 64.0);
+            assert!(layout.seek.right() < layout.duration.left());
+
+            let image = contain_media_rect(layout.media, Vec2::new(960.0, 540.0));
+            assert!(layout.media.contains_rect(image));
+            assert!(image.width() > 0.0 && image.height() > 0.0);
+        }
+    }
+
+    #[test]
     fn download_directory_is_canonicalized_before_opening() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -9251,5 +9696,23 @@ mod tests {
         let raw = "Hẹn giờ gửi tin nhắn ([#38](https://github.com/ctdoteam1110/ctdozlite/issues/38)), REST API ([#35](https://github.com/ctdoteam1110/ctdozlite/issues/35))";
         let cleaned = extract_markdown_links_inline(raw);
         assert_eq!(cleaned, "Hẹn giờ gửi tin nhắn (#38), REST API (#35)");
+    }
+}
+
+#[cfg(test)]
+mod forward_order_tests {
+    use super::*;
+
+    #[test]
+    fn forward_recency_uses_messages_or_sidebar_snapshot_in_milliseconds() {
+        let mut thread = Thread::default();
+        assert_eq!(forward_recency_ms(&thread), 0);
+        thread.presentation.last_message_ts = 1_700_000_000; // seconds
+        assert_eq!(forward_recency_ms(&thread), 1_700_000_000_000);
+        thread.messages.push(ChatMessage {
+            ts: 1_800_000_000_000,
+            ..Default::default()
+        });
+        assert_eq!(forward_recency_ms(&thread), 1_800_000_000_000);
     }
 }

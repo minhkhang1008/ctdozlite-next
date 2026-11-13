@@ -1,5 +1,23 @@
 use super::*;
 
+/// Clamp a width even when a narrow viewport leaves less than the preferred minimum.
+pub(super) fn clamp_width(width: f32, minimum: f32, maximum: f32) -> f32 {
+    width.clamp(minimum, maximum.max(minimum))
+}
+
+#[cfg(test)]
+mod layout_tests {
+    #[test]
+    fn narrow_cards_do_not_panic_when_maximum_is_below_minimum() {
+        for (minimum, maximum) in [(135.0, 100.0), (76.0, 30.0), (135.0, 340.0)] {
+            assert_eq!(
+                super::clamp_width(200.0, minimum, maximum),
+                200.0_f32.min(maximum.max(minimum))
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Semantic Design System Tokens (UI/UX Pro Max — Minimalism & Swiss Style)
 // ---------------------------------------------------------------------------

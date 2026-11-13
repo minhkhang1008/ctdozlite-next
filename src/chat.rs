@@ -339,7 +339,12 @@ impl ChatMessage {
             "[Video]" => Some("Video Zalo"),
             _ => None,
         };
-        if let Some(kind) = source_kind.or(label_kind) {
+        let media_cdn_kind = self
+            .link_url
+            .as_deref()
+            .filter(|url| is_zalo_video_cdn_url(url))
+            .map(|_| "Video Zalo");
+        if let Some(kind) = media_cdn_kind.or(source_kind).or(label_kind) {
             self.link_src = Some(kind.into());
             if kind == "Hình ảnh Zalo" && self.link_thumb.is_none() {
                 self.link_thumb = self.link_url.clone();
@@ -1970,6 +1975,9 @@ async fn wait_for_file_done(file_id: &str, timeout: std::time::Duration) -> Opti
 /// Implements Zalo PC 26.10.11's two-stage chunked upload (`photo_original/upload` -> `photo_original/send`
 /// for images; `asyncfile/upload` -> `asyncfile/msg` for videos/files) with automatic fallback to
 /// single-shot `message/photo` (`11152`) and `message/sharefile_full` (`11146`).
+/// `fType` of an `asyncfile/msg` payload for a regular file. Zalo reserves 2 for folders.
+const ASYNC_FILE_TYPE_FILE: u8 = 1;
+
 pub async fn send_attachment(
     s: &Session,
     to_id: &str,
@@ -2338,7 +2346,8 @@ pub async fn send_attachment_ext(
         msg_obj.insert("totalSize".into(), json!(total_size));
         msg_obj.insert("fileName".into(), json!(file_name));
         msg_obj.insert("clientId".into(), client_file_id);
-        msg_obj.insert("fType".into(), json!(if is_video { 2 } else { 1 }));
+        // fType 2 means "folder" in Zalo (phones render a folder icon); videos sent as files stay 1.
+        msg_obj.insert("fType".into(), json!(ASYNC_FILE_TYPE_FILE));
         msg_obj.insert("fileCount".into(), json!(0));
         msg_obj.insert("fdata".into(), json!("{}"));
         if is_group {
@@ -5305,25 +5314,7 @@ pub async fn get_cloud_messages(
         .as_ref()
         .map(|l| !l.send2me_id.is_empty() && l.send2me_id == clean_id)
         .unwrap_or(false);
-    let mut map = serde_json::Map::new();
-    map.insert("groupId".into(), json!(clean_id));
-    map.insert(
-        "globalMsgId".into(),
-        json!(if global_msg_id.is_empty() || global_msg_id == "0" {
-            "9223372036854775808"
-        } else {
-            global_msg_id
-        }),
-    );
-    map.insert("count".into(), json!(count));
-    map.insert("msgIds".into(), json!([]));
-    map.insert("imei".into(), json!(s.imei));
-    if is_send2me {
-        map.insert("isOA".into(), json!(1));
-    }
-    map.insert("src".into(), json!(if is_old { 3 } else { 1 }));
-
-    let body = Value::Object(map);
+    let body = cloud_history_body(clean_id, global_msg_id, count, &s.imei, is_send2me, is_old);
     let params = s.encoded_params(&body)?;
     let ep = if is_old {
         "/api/cm/getoldv2"
@@ -5353,6 +5344,42 @@ pub async fn get_cloud_messages(
         }
     }
     Ok(dec)
+}
+
+fn cloud_history_body(
+    clean_id: &str,
+    global_msg_id: &str,
+    count: u32,
+    imei: &str,
+    is_send2me: bool,
+    is_old: bool,
+) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("groupId".into(), json!(clean_id));
+    map.insert(
+        "globalMsgId".into(),
+        json!(cloud_history_cursor(global_msg_id)),
+    );
+    map.insert("count".into(), json!(count));
+    map.insert("msgIds".into(), json!([]));
+    map.insert("imei".into(), json!(imei));
+    if is_send2me {
+        map.insert("isOA".into(), json!(1));
+    }
+    // The checked-in Zalo PC bundle defaults `src` to -1 for both recent and old pages.
+    let _ = is_old;
+    map.insert("src".into(), json!(-1));
+    Value::Object(map)
+}
+
+fn cloud_history_cursor(cursor: &str) -> &str {
+    // getCM's initial cursor is "0", not an artificial message ID above i64::MAX.
+    // Evidence: re-notes/42_history_sync_entrypoints.md.
+    if cursor.is_empty() {
+        "0"
+    } else {
+        cursor
+    }
 }
 
 /// Call Zalo's native HTTP long-polling message endpoint (`getChatFromPolling`, cmd `99100`).
@@ -5654,6 +5681,20 @@ pub fn is_zalo_photo_cdn_url(url: &str) -> bool {
                 || u.contains("zfcloud")))
 }
 
+fn is_zalo_video_cdn_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let is_media_domain = host == "dlmd.me" || host.ends_with(".dlmd.me");
+    is_media_domain && (host.starts_with("video-") || host.contains("-zvc"))
+}
+
 /// Check that a remote URL does not target loopback, private RFC1918, or link-local destinations.
 pub fn is_safe_external_image_url(url: &str) -> bool {
     let lower = url.trim().to_ascii_lowercase();
@@ -5715,6 +5756,7 @@ pub fn resolve_attachment_file_name(title: Option<&str>, text: &str, url: &str) 
         let t = s.trim();
         t.strip_prefix("[Tập tin]")
             .or_else(|| t.strip_prefix("[Chia sẻ]"))
+            .or_else(|| t.strip_prefix("[Video]"))
             .map(str::trim)
             .unwrap_or(t)
     }
@@ -5913,19 +5955,47 @@ fn parse_chat_message(it: &Value) -> Option<ChatMessage> {
         .and_then(extract_content_text)
         .unwrap_or_default();
 
-    let is_photo_msg = matches!(msg_type.as_str(), "chat.photo" | "photo" | "2")
-        || link_src.as_deref() == Some("Hình ảnh Zalo")
-        || link_url.as_deref().is_some_and(is_zalo_photo_cdn_url)
-        || link_thumb.as_deref().is_some_and(is_zalo_photo_cdn_url);
-    let is_file_msg = matches!(
-        msg_type.as_str(),
-        "chat.file" | "file" | "19" | "share.file"
-    ) || link_src.as_deref() == Some("Tập tin Zalo")
-        || link_url
-            .as_deref()
-            .is_some_and(|u| u.to_ascii_lowercase().contains("/renewmedia"));
+    let is_voice_msg = matches!(msg_type.as_str(), "chat.voice" | "voice" | "3");
+    if is_voice_msg {
+        link_src = Some("Thoại Zalo".into());
+    }
+    let is_video_msg = matches!(msg_type.as_str(), "chat.video" | "video" | "4")
+        || link_url.as_deref().is_some_and(is_zalo_video_cdn_url);
+    let is_photo_msg = !is_voice_msg
+        && !is_video_msg
+        && (matches!(msg_type.as_str(), "chat.photo" | "photo" | "2")
+            || link_src.as_deref() == Some("Hình ảnh Zalo")
+            || link_url.as_deref().is_some_and(is_zalo_photo_cdn_url)
+            || link_thumb.as_deref().is_some_and(is_zalo_photo_cdn_url));
+    let is_file_msg = !is_voice_msg
+        && !is_video_msg
+        && (matches!(
+            msg_type.as_str(),
+            "chat.file" | "file" | "19" | "share.file"
+        ) || link_src.as_deref() == Some("Tập tin Zalo")
+            || link_url
+                .as_deref()
+                .is_some_and(|u| u.to_ascii_lowercase().contains("/renewmedia")));
 
-    if is_photo_msg && !is_file_msg && sticker_meta.is_none() {
+    if is_video_msg && sticker_meta.is_none() {
+        link_src = Some("Video Zalo".to_string());
+        let resolved_name = resolve_attachment_file_name(
+            link_title.as_deref(),
+            &content,
+            link_url.as_deref().unwrap_or_default(),
+        );
+        if link_title.is_none()
+            || link_title
+                .as_deref()
+                .is_some_and(|title| title.eq_ignore_ascii_case("renewmedia"))
+        {
+            link_title = Some(resolved_name.clone());
+        }
+        let final_title = link_title.as_deref().unwrap_or(&resolved_name);
+        if !content.trim().starts_with("[Video]") {
+            content = format!("[Video] {final_title}");
+        }
+    } else if is_photo_msg && !is_file_msg && sticker_meta.is_none() {
         link_src = Some("Hình ảnh Zalo".to_string());
         if link_thumb.is_none() {
             link_thumb = link_url.clone();
@@ -6155,7 +6225,33 @@ fn parse_chat_message(it: &Value) -> Option<ChatMessage> {
         (reacts, summaries)
     };
 
+    let mut voice_source = if is_voice_msg {
+        raw_content_val.and_then(|v| v.get("params")).and_then(|v| {
+            if let Some(text) = v.as_str() {
+                serde_json::from_str::<Value>(text).ok()
+            } else {
+                Some(v.clone())
+            }
+        })
+    } else {
+        None
+    };
+    if let Some(source) = voice_source.as_mut() {
+        if let Some(duration) = source
+            .get("duration")
+            .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()))
+        {
+            if let Some(object) = source.as_object_mut() {
+                object.insert("duration_seconds".into(), json!(duration / 1000.0));
+            }
+        }
+    }
     Some(ChatMessage {
+        kind: if is_voice_msg {
+            crate::message_model::MessageKind::Voice
+        } else {
+            Default::default()
+        },
         id: msg_id,
         client_message_id: ["cliMsgId", "clientId", "client_message_id"]
             .iter()
@@ -6183,6 +6279,7 @@ fn parse_chat_message(it: &Value) -> Option<ChatMessage> {
         link_thumb,
         link_src,
 
+        history_source: voice_source,
         ..Default::default()
     })
 }
@@ -6928,6 +7025,26 @@ pub fn normalize_phone_for_lookup(raw: &str) -> String {
     }
 }
 
+/// Vietnamese user-facing text for a non-zero `profile/get` error code.
+///
+/// Zalo PC itself special-cases only 216; 212 is the same "no visible account" answer the server
+/// gives when the number is unregistered or the owner disabled search by phone.
+fn phone_lookup_error_message(code: i64, server_message: &str) -> String {
+    match code {
+        212 | 216 => format!(
+            "Không tìm thấy tài khoản: số chưa đăng ký Zalo hoặc chủ tài khoản đã tắt cho phép tìm qua SĐT (mã {code})"
+        ),
+        _ => {
+            let msg = if server_message.is_empty() {
+                "Không tìm thấy tài khoản"
+            } else {
+                server_message
+            };
+            format!("{msg} (mã {code})")
+        }
+    }
+}
+
 /// Look up a Zalo user profile by phone number (`getUserByPhone` in `compact-app-pc.js:14306443`, cmd `11420`).
 ///
 /// Endpoint: `GET {domains.friend}/api/friend/profile/get?{common}&params={encodeAES({ phone, avatar_size: 240, language: "vi", imei, reqSrc: 40 })}`
@@ -6960,16 +7077,11 @@ pub async fn find_user_by_phone(s: &Session, raw_phone: &str) -> Result<PhoneLoo
     let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
     if let Some(code) = dec.get("error_code").and_then(Value::as_i64) {
         if code != 0 {
-            if code == 216 {
-                anyhow::bail!(
-                    "Số điện thoại chưa đăng ký Zalo hoặc người dùng đã chặn tìm kiếm qua SĐT (mã 216)"
-                );
-            }
             let err_msg = dec
                 .get("error_message")
                 .and_then(Value::as_str)
-                .unwrap_or("Không tìm thấy tài khoản");
-            anyhow::bail!("{err_msg} (mã {code})");
+                .unwrap_or_default();
+            anyhow::bail!("{}", phone_lookup_error_message(code, err_msg));
         }
     }
 
@@ -8001,76 +8113,174 @@ pub async fn request_phone_sync_with_temp_key(
         "/api/message/pull_mobile_msg?{}&params={params}",
         s.common_params()
     );
-    if let Ok(resp) = s.get_endpoint("file", &path).await {
-        let dec = s.maybe_decrypt(resp, s.session_key_bytes()).await;
-        if dec.get("error_code").and_then(Value::as_i64) == Some(0) {
-            return Ok(dec);
-        }
-    }
-    let post_url = format!(
-        "{}/api/message/pull_mobile_msg?{}",
-        s.domains.file,
-        s.common_params()
-    );
-    let resp = s.post_form(&post_url, format!("params={params}")).await?;
-    Ok(s.maybe_decrypt(resp, s.session_key_bytes()).await)
+    // A manual request is sent once; a rejection must not trigger another prompt.
+    let response = s.get_endpoint("file", &path).await?;
+    Ok(s.maybe_decrypt(response, s.session_key_bytes()).await)
 }
 
-/// Request transfer-sync v2 từ điện thoại. Lệnh thật đi qua WebSocket
-/// `cmd 592` (wake-up) + `cmd 590` (SYNC_MESSAGE.REQUEST) — KHÔNG có HTTP REST
-/// `/api/transfer-sync-v2/request-sync` (404 mọi host, #87); cmd 12888 trong
-/// bundle Zalo chỉ là command-id, dispatch qua WS runner.
-pub async fn request_phone_sync_v2(s: &Session, _public_key: &str) -> Result<Value> {
-    if s.login.is_none() {
-        anyhow::bail!("chưa đăng nhập");
+/// Start a manual Sync V2 session over command 590, with real conversation partitions.
+///
+/// # Errors
+/// Returns an error for unauthenticated sessions, missing WASM, invalid noise mappings
+/// or an unavailable WebSocket. No legacy V1 request or command 592 is emitted.
+pub async fn start_phone_sync_v2(s: &Session, threads: &[Thread]) -> Result<String> {
+    let login = s
+        .login
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("chưa đăng nhập"))?;
+    let ids: Vec<String> = threads
+        .iter()
+        .filter(|t| !t.is_group && t.id != login.send2me_id)
+        .filter(|t| !t.id.is_empty() && t.id.bytes().all(|b| b.is_ascii_digit()))
+        .map(|t| t.id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if ids.is_empty() {
+        anyhow::bail!("Chưa có hội thoại cá nhân để yêu cầu Sync V2. Hãy làm mới hội thoại trước.");
     }
-    let sync_id = crate::param_cipher::random_hex(32);
-    let temp_key = crate::history_sync::latest_mobile_temp_key();
-    // Sync V2 BẮT BUỘC có keypair thật từ WASM libzproto (host bằng wasmtime,
-    // không cần Node.js). Fail rõ ở đây thay vì gửi request rác.
-    let keys = crate::history_sync::generate_sync_v2_keys().map_err(|e| {
-        anyhow::anyhow!(
-            "Không sinh được khóa Sync V2: {e}. \
-             Cài Zalo PC hoặc đặt CTDOZLITE_ZPROTO_WASM trỏ tới file WASM"
-        )
-    })?;
-    let (ik_pub, ek_pub) = (keys.ik_pub, keys.ek_pub);
-    // 1. Wake up mobile master device over WebSocket (`cmd 592`)
-    let _ = crate::socket::send_mobile_wakeup(&sync_id);
-
-    // 2. Build SyncFull v2 request payload matching `shared-worker.js:282247` & `314736`
-    let sync_data = json!({
-        "syncId": sync_id,
-        "syncType": 0, // No.d.SyncFull = 0
-        "ek": ek_pub,
-        "ik": ik_pub,
-        "toDevice": 0, // No.c.Mobile = 0
-        "tempKey": temp_key,
-        "deviceName": s.computer_name,
-        "req": {
-            "type": "message",
-            "priority": 1,
-            "queries": [
-                {
-                    "partition": "",
-                    "from": 0,
-                    "to": 9_007_199_254_740_991_i64,
-                    "limit": 2000
-                }
-            ],
-            "batchSize": 2000
-        },
-        "ver": 1,
-        "ussidx": 0
-    });
-    let sent_ws = crate::socket::send_sync_message_ws_request(&sync_data);
-    Ok(json!({
-        "error_code": 0,
-        "data": {
-            "syncId": sync_id,
-            "ws_sent": sent_ws,
+    let mut partitions = std::collections::HashMap::new();
+    for chunk in ids.chunks(100) {
+        if crate::history_sync::PHONE_SYNC_CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("Đã dừng đồng bộ.");
         }
-    }))
+        let numeric: Vec<u64> = chunk
+            .iter()
+            .map(|id| id.parse())
+            .collect::<std::result::Result<_, _>>()?;
+        let params = s.encoded_params(&json!({ "fids": numeric, "gids": [] }))?;
+        // getNoisedUids in the checked-in Zalo bundle uses the profile service (cmd 12390).
+        let path = format!("/api/znoise?{}&params={params}", s.common_params());
+        let response = s.get_endpoint("profile", &path).await?;
+        let decoded = s.maybe_decrypt(response, s.session_key_bytes()).await;
+        partitions.extend(parse_sync_partitions(chunk, &decoded)?);
+    }
+    if crate::history_sync::PHONE_SYNC_CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+        anyhow::bail!("Đã dừng đồng bộ.");
+    }
+    let keys = tokio::task::spawn_blocking(crate::history_sync::generate_sync_v2_keys).await??;
+    let sync_id = crate::param_cipher::random_base62(32)?;
+    let device_name = sync_device_name(s).await;
+    let payload = build_sync_v2_request(
+        &sync_id,
+        &device_name,
+        &keys.ik_pub,
+        &keys.ek_pub,
+        &partitions,
+    );
+    if crate::history_sync::PHONE_SYNC_CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+        anyhow::bail!("Đã dừng đồng bộ.");
+    }
+    crate::history_sync::begin_v2_transfer(&sync_id, partitions)?;
+    if !crate::socket::send_sync_message_ws_request(&payload) {
+        drop(crate::history_sync::V2SyncLease(sync_id));
+        anyhow::bail!("WebSocket chưa sẵn sàng. Hãy chờ kết nối rồi thử đồng bộ lại.");
+    }
+    Ok(sync_id)
+}
+
+#[derive(serde::Deserialize)]
+struct NoiseIds {
+    fids: Vec<String>,
+}
+
+fn parse_sync_partitions(
+    ids: &[String],
+    response: &Value,
+) -> Result<std::collections::HashMap<String, String>> {
+    if response
+        .get("error_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|code| code != 0)
+    {
+        anyhow::bail!("Máy chủ chưa cấp định danh hội thoại cho Sync V2.");
+    }
+    let data = response.get("data").unwrap_or(response);
+    let data = if let Some(text) = data.as_str() {
+        serde_json::from_str(text)?
+    } else {
+        data.clone()
+    };
+    let noise: NoiseIds = serde_json::from_value(data)?;
+    if noise.fids.len() != ids.len()
+        || noise
+            .fids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 512 || id.chars().any(char::is_control))
+    {
+        anyhow::bail!("Định danh hội thoại Sync V2 trả về không hợp lệ.");
+    }
+    let result: std::collections::HashMap<_, _> = noise
+        .fids
+        .into_iter()
+        .zip(ids)
+        .map(|(noise, id)| (format!("oneone/{noise}"), id.clone()))
+        .collect();
+    if result.len() != ids.len() {
+        anyhow::bail!("Định danh hội thoại Sync V2 bị trùng.");
+    }
+    Ok(result)
+}
+
+fn build_sync_v2_request(
+    sync_id: &str,
+    device: &str,
+    ik: &str,
+    ek: &str,
+    partitions: &std::collections::HashMap<String, String>,
+) -> Value {
+    let mut names: Vec<_> = partitions.keys().collect();
+    names.sort();
+    let queries: Vec<Value> = names
+        .into_iter()
+        .map(|partition| {
+            json!({
+                "partition": partition, "from": 0, "to": 9_007_199_254_740_991_i64, "limit": 2000,
+            })
+        })
+        .collect();
+    json!({ "syncId": sync_id, "syncType": 0, "ek": ek, "ik": ik, "toDevice": 0,
+        "tempKey": "", "deviceName": device,
+        "req": { "type": "message", "priority": 1, "queries": queries, "batchSize": 2000 },
+        "ver": 1, "ussidx": 0 })
+}
+
+pub(crate) async fn sync_device_name(s: &Session) -> String {
+    if !s.computer_name.trim().is_empty() && s.computer_name != "DESKTOP" {
+        return s.computer_name.clone();
+    }
+    for name in ["COMPUTERNAME", "HOSTNAME"] {
+        if let Ok(value) = std::env::var(name) {
+            if !value.trim().is_empty() {
+                return value.trim().into();
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        let mut command = tokio::process::Command::new("/bin/hostname");
+        command
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        if let Ok(Ok(output)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), command.output()).await
+        {
+            if let Ok(name) = String::from_utf8(output.stdout) {
+                let name = name.trim().trim_end_matches(".local");
+                if !name.is_empty() {
+                    return name.into();
+                }
+            }
+        }
+    }
+    "ctdozlite-next".into()
+}
+
+/// Compatibility wrapper for callers without a current thread snapshot.
+pub async fn request_phone_sync_v2(s: &Session, _public_key: &str) -> Result<Value> {
+    let threads = tokio::task::spawn_blocking(load_threads_cache).await?;
+    let sync_id = start_phone_sync_v2(s, &threads).await?;
+    Ok(json!({"error_code": 0, "data": {"syncId": sync_id, "ws_sent": true}}))
 }
 
 /// Cancel an active mobile message sync request (`cancelTransferMessage` @ `app.asar:14372356`, cmd `12700`, #68).
@@ -8383,7 +8593,91 @@ pub async fn delete_conversation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn async_file_type_is_never_the_folder_type() {
+        assert_eq!(
+            super::ASYNC_FILE_TYPE_FILE,
+            1,
+            "fType 2 renders as a folder on phones"
+        );
+    }
+
+    #[test]
+    fn phone_lookup_212_and_216_explain_unregistered_or_hidden_numbers() {
+        for code in [212, 216] {
+            let text = super::phone_lookup_error_message(code, "Không tìm thấy");
+            assert!(text.contains("tắt cho phép tìm qua SĐT"), "{text}");
+            assert!(text.contains(&format!("mã {code}")));
+        }
+        assert_eq!(
+            super::phone_lookup_error_message(5, "Lỗi X"),
+            "Lỗi X (mã 5)"
+        );
+    }
+
+    #[test]
+    fn voice_wire_metadata_wins_over_file_size_and_short_duration_is_milliseconds() {
+        let value = json!({"msgId":"voice-fixture","msgType":3,"content":{"href":"https://voice.zdn.vn/fake.aac","params":r#"{"duration":1500,"fileSize":1024}"#}});
+        let message = parse_chat_message(&value).unwrap();
+        assert_eq!(message.kind, crate::message_model::MessageKind::Voice);
+        assert_eq!(message.link_src.as_deref(), Some("Thoại Zalo"));
+        assert_eq!(message.history_source.unwrap()["duration_seconds"], 1.5);
+        let sent=super::parse_voice_send_response(&json!({"error_code":0,"data":{"fileUrl":"https://voice.zdn.vn/fake.aac","msgId":"m1"}}),1,2).unwrap();
+        assert_eq!(sent.history_source.unwrap()["duration_seconds"], 2);
+        assert!(
+            super::parse_voice_send_response(&json!({"error_code":0,"data":{}}), 1, 2).is_err()
+        );
+        assert!(super::parse_voice_send_response(&json!({"error_code":600}), 1, 2).is_err());
+    }
+
+    #[test]
+    fn v2_request_uses_real_partitions_and_no_stale_temp_key() {
+        let ids = vec!["123".into(), "456".into()];
+        let parts = super::parse_sync_partitions(
+            &ids,
+            &serde_json::json!({"error_code":0,"data":{"fids":["noise-a","noise-b"]}}),
+        )
+        .unwrap();
+        assert_eq!(parts["oneone/noise-a"], "123");
+        assert!(super::parse_sync_partitions(
+            &ids,
+            &serde_json::json!({"data":{"fids":["noise-a"]}})
+        )
+        .is_err());
+        assert!(super::parse_sync_partitions(
+            &ids,
+            &serde_json::json!({"data":{"fids":["same","same"]}})
+        )
+        .is_err());
+        let payload = super::build_sync_v2_request(
+            "session-test",
+            "my-mac",
+            "public-ik",
+            "public-ek",
+            &parts,
+        );
+        assert_eq!(payload["tempKey"], "");
+        assert_eq!(payload["req"]["queries"][0]["partition"], "oneone/noise-a");
+        assert_eq!(payload["req"]["batchSize"], 2000);
+        assert_eq!(payload["deviceName"], "my-mac");
+    }
+
     use super::*;
+
+    #[test]
+    fn cloud_history_initial_cursor_matches_get_cm_default() {
+        assert_eq!(cloud_history_cursor(""), "0");
+        assert_eq!(cloud_history_cursor("0"), "0");
+        assert_eq!(cloud_history_cursor("123456789"), "123456789");
+    }
+
+    #[test]
+    fn cloud_history_uses_zalo_pc_default_source_for_recent_and_old_pages() {
+        for is_old in [false, true] {
+            let body = cloud_history_body("group-1", "0", 50, "imei-test", false, is_old);
+            assert_eq!(body["src"], -1);
+        }
+    }
 
     #[test]
     fn group_posting_restriction_respects_member_roles() {
@@ -9673,6 +9967,52 @@ mod send_identity_tests {
     }
 
     #[test]
+    fn parse_chat_video_preserves_video_kind_and_extension() {
+        let raw_video = json!({
+            "msgId": "video_1",
+            "msgType": "chat.video",
+            "uidFrom": "user-1",
+            "ts": 1700000003000_i64,
+            "content": {
+                "href": "https://f16-zpc.zdn.vn/renewMedia?p=video-token",
+                "thumb": "https://photo-stal-zmp.zdn.vn/video/poster.jpg",
+                "params": "{\"fileName\":\"clip-ngan\",\"fileExt\":\"mp4\",\"fileSize\":\"1048576\"}"
+            }
+        });
+
+        let msg = parse_chat_message(&raw_video).expect("must parse video message");
+
+        assert_eq!(msg.link_src.as_deref(), Some("Video Zalo"));
+        assert_eq!(msg.link_title.as_deref(), Some("clip-ngan.mp4"));
+        assert_eq!(msg.text, "[Video] clip-ngan.mp4");
+        assert_eq!(
+            msg.link_thumb.as_deref(),
+            Some("https://photo-stal-zmp.zdn.vn/video/poster.jpg")
+        );
+    }
+
+    #[test]
+    fn parse_chat_video_recognizes_real_zvc_cdn_when_wire_type_is_generic_file() {
+        let raw_video = json!({
+            "msgId": "video-cdn-1",
+            "msgType": 19,
+            "uidFrom": "user-1",
+            "ts": 1700000003000_i64,
+            "content": {
+                "href": "https://f141-zvc.dlmd.me/mc/video-token",
+                "thumb": "https://f16-zpcloud.zdn.vn/poster.jpg",
+                "fileName": "opaque-storage-token",
+                "fileSize": 1048576
+            }
+        });
+
+        let msg = parse_chat_message(&raw_video).expect("must parse CDN video");
+
+        assert_eq!(msg.link_src.as_deref(), Some("Video Zalo"));
+        assert!(msg.text.starts_with("[Video]"));
+    }
+
+    #[test]
     fn test_is_zalo_photo_cdn_url_comprehensive() {
         // Direct images and Zalo CDNs
         assert!(is_zalo_photo_cdn_url("https://photo-stal-6.zdn.vn/gr/jpg/beab7091ea123f4c6603/1WUpuktR2ex7c7iAAbWSyDORFc86tI59Rxwuy31ukJWzM6h8D9hN5HA66gJ2eFCzUBU.jpg"));
@@ -9918,4 +10258,162 @@ mod send_identity_tests {
             }
         );
     }
+}
+
+/// Upload a user-confirmed AAC voice message through the standard signed session path.
+pub async fn send_voice_message(
+    s: &Session,
+    to_id: &str,
+    is_group: bool,
+    voice_path: &std::path::Path,
+    mime: &str,
+    duration_secs: u64,
+) -> Result<(Value, ChatMessage)> {
+    if s.login.is_none() {
+        anyhow::bail!("chưa đăng nhập");
+    }
+    let voice_bytes = tokio::fs::read(voice_path).await?;
+    anyhow::ensure!(voice_bytes.len() <= 8 * 1024 * 1024, "Ghi âm quá lớn.");
+    if voice_bytes.is_empty() {
+        anyhow::bail!("File ghi âm rỗng (0 byte)");
+    }
+    let file_name = voice_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("voice.aac")
+        .to_string();
+    let file_host = s.domains.file.trim_end_matches('/');
+    anyhow::ensure!(!file_host.is_empty(), "Thiếu máy chủ tải ghi âm.");
+    let clean_target = if is_group {
+        to_id
+            .trim_start_matches("group_")
+            .trim_start_matches('g')
+            .trim_start_matches('G')
+    } else {
+        to_id
+    };
+    let client_id = next_client_message_id();
+    let file_type = if file_name.to_ascii_lowercase().contains(".amr") {
+        "amr"
+    } else {
+        "aac"
+    };
+    let (upload_ep, target_type, params_obj) = if is_group {
+        let m = obj(&[
+            ("grid", json!(clean_target)),
+            ("clientId", json!(client_id.to_string())),
+            ("fileName", json!(file_name.clone())),
+            ("fileSize", json!(voice_bytes.len() as u64)),
+            ("totalSize", json!(voice_bytes.len() as u64)),
+            ("totalChunk", json!(1)),
+            ("chunkId", json!(1)),
+            ("duration", json!(duration_secs)),
+            ("fileType", json!(file_type)),
+            ("imei", json!(s.imei.clone())),
+            ("isE2EE", json!(0)),
+        ]);
+        ("/api/group/voice/upload", 11, m)
+    } else {
+        let m = obj(&[
+            ("toid", json!(clean_target)),
+            ("clientId", json!(client_id.to_string())),
+            ("fileName", json!(file_name.clone())),
+            ("fileSize", json!(voice_bytes.len() as u64)),
+            ("totalSize", json!(voice_bytes.len() as u64)),
+            ("totalChunk", json!(1)),
+            ("chunkId", json!(1)),
+            ("duration", json!(duration_secs)),
+            ("fileType", json!(file_type)),
+            ("imei", json!(s.imei.clone())),
+            ("isE2EE", json!(0)),
+        ]);
+        ("/api/message/voice/upload", 2, m)
+    };
+    let params = s.encoded_params(&params_obj)?;
+    let url = format!(
+        "{file_host}{upload_ep}?{}&params={params}&type={target_type}",
+        s.common_params()
+    );
+    let up_raw = s
+        .post_multipart(&url, "chunkContent", &file_name, mime, &voice_bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("tải lên tin nhắn thoại thất bại: {e}"))?;
+    let mut send_resp = s.maybe_decrypt(up_raw, s.session_key_bytes()).await;
+    let need_url = send_resp
+        .get("data")
+        .and_then(|d| pick_str(d, &["fileUrl", "url", "normalUrl", "href"]))
+        .unwrap_or_default()
+        .is_empty();
+    if need_url && FILE_DONE_LISTENER_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+        let fid = send_resp
+            .get("data")
+            .and_then(|d| pick_str(d, &["fileId"]).filter(|id| id != "-1"))
+            .unwrap_or_default();
+        if !fid.is_empty() {
+            if let Some(url) = wait_for_file_done(&fid, FILE_DONE_TIMEOUT).await {
+                if let Some(obj) = send_resp.get_mut("data").and_then(Value::as_object_mut) {
+                    obj.insert("fileUrl".into(), Value::String(url));
+                }
+            } else {
+                crate::logger::log_error(
+                    "chat::send_voice",
+                    &format!("no file_done event for fileId {fid} within {FILE_DONE_TIMEOUT:?}"),
+                );
+            }
+        }
+    }
+    let cm = parse_voice_send_response(&send_resp, client_id, duration_secs)?;
+    Ok((send_resp, cm))
+}
+
+/// Validate the voice upload envelope before showing a playable sent message.
+pub fn parse_voice_send_response(
+    send_resp: &Value,
+    client_id: u64,
+    duration_secs: u64,
+) -> Result<ChatMessage> {
+    if let Some(code) = send_resp.get("error_code").and_then(Value::as_i64) {
+        if code != 0 {
+            let msg = send_resp
+                .get("error_message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(crate::session::SessionError::new(code, msg).into());
+        }
+    }
+    anyhow::ensure!(
+        send_resp.get("error_code").and_then(Value::as_i64) == Some(0),
+        "Phản hồi ghi âm không hợp lệ."
+    );
+    let data_node = send_resp.get("data").unwrap_or(send_resp);
+    let file_url =
+        pick_str(data_node, &["fileUrl", "url", "normalUrl", "href"]).unwrap_or_default();
+    let msg_id = pick_str(data_node, &["msgId"]).unwrap_or_else(|| format!("out_{client_id}"));
+    anyhow::ensure!(
+        !file_url.is_empty(),
+        "Máy chủ chưa trả đường dẫn ghi âm. Kiểm tra hội thoại trước khi thử lại."
+    );
+    let mm = duration_secs / 60;
+    let ss = duration_secs % 60;
+    Ok(ChatMessage {
+        id: msg_id,
+        client_message_id: client_id.to_string(),
+        sender: "Tôi".into(),
+        text: "[Tin nhắn thoại]".into(),
+        time: crate::ui::clock(),
+        is_outgoing: true,
+        ts: client_id as i64,
+        delivery: crate::message_model::DeliveryState::ServerAccepted,
+        kind: crate::message_model::MessageKind::Voice,
+        history_source: Some(json!({"duration_seconds":duration_secs})),
+        link_url: if file_url.is_empty() {
+            None
+        } else {
+            Some(file_url)
+        },
+        link_title: Some(format!("Tin nhắn thoại ({mm:02}:{ss:02})")),
+        link_desc: None,
+        link_src: Some("Thoại Zalo".into()),
+        ..Default::default()
+    })
 }

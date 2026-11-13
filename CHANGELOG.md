@@ -8,7 +8,26 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-14
+
+### Fixed (Sửa lỗi)
+- **Phát media trong ứng dụng:** bỏ thông báo tải thừa khi nghe voice, căn giữa nút tạm dừng bằng hình học thay vì ký tự font; viewer video giữ khung hình và toàn bộ nút phát/seek/âm lượng bên trong cửa sổ thay vì chỉ có tiếng hoặc kéo thanh tiến trình ra ngoài.
+- **Đồng bộ điện thoại:** chọn Android hoặc iPhone ở lần đầu và ghi nhớ lựa chọn; luồng Android không cần WASM/Zalo PC; tách làm mới máy chủ khỏi yêu cầu điện thoại. Chờ kết quả nhập thực tế, báo lỗi khi hết thời gian/từ chối; sửa nhận diện người gửi và nhập nguyên tử, chống trùng. Đã kiểm thử giả lập, chưa xác minh trên điện thoại thật.
+- **Cửa sổ hẹp và cuộc gọi đến:** tránh panic ở link card/tên người gọi; chỉ thương lượng relay khi bấm Nghe, chặn trả lời trùng và tác vụ trả lời đã cũ.
+- **Sync V2 từ điện thoại:** sửa entropy WASM và chữ ký hàm metadata, giữ khóa định danh bằng file riêng tư, dùng một phiên V2 có dọn dẹp và lưu batch theo đúng hội thoại. Đã kiểm thử offline/WASM; chưa xác minh trên điện thoại thật.
+- **Nút đồng bộ ở thanh bên:** dùng chung thao tác với nút đồng bộ điện thoại trong Cài đặt và mở tiến độ để theo dõi kết quả.
+- **Đồng bộ lịch sử Nhóm & Cloud:** lấy tin gần đây trước khi phân trang nếu chưa có mốc tin nhắn; hiển thị lỗi máy chủ ngắn gọn, không chứa URL yêu cầu.
+- **Ghi nhớ giao diện Sáng / Tối:** mọi nút đổi giao diện đều lưu lựa chọn để dùng lại khi mở app; mặc định Sáng khi chưa có cài đặt.
+
 ### Added (Tính năng mới)
+- **Xem video ngay trong hội thoại:** poster giữ đúng tỷ lệ ngang/dọc; trình xem nền tối có phát/tạm dừng, thời gian, seek và âm lượng theo Zalo Cloud. Video tải theo yêu cầu vào cache riêng tư có trần 512 MB rồi phát hình/âm thanh bằng FFmpeg; chỉ giữ một frame chờ UI và buffer âm thanh tối đa hai giây.
+- **Phát tin nhắn thoại trong app:** bubble có nút phát/tạm dừng, waveform, đồng hồ và tiến độ như Zalo Cloud; chỉ một tin thoại phát tại một thời điểm.
+- **Công cụ Sync V2 tự chuẩn bị:** tải runtime công khai từ Zalo khi thiếu, xác minh SHA-256/khả năng chạy, cache riêng tư; không cần cài Zalo PC hoặc đặt WASM bằng tay.
+- **Bản nháp, Đã lưu, nhắc hẹn riêng và tìm kiếm nâng cao:** SQLite theo tài khoản, nháp giữ quote/mention, ghi chú tin đã lưu, nhắc riêng không gửi vào hội thoại, tìm từ khóa/bộ lọc và mở đúng tin cũ từ lịch sử cục bộ.
+- **Xem trước văn bản PDF/Office/text:** chỉ tải sau khi bấm, giới hạn tải/giải nén Office; PDF xử lý trong tiến trình con có thời hạn.
+- **Ghi âm AAC:** thu micro trên luồng riêng, resample đúng định dạng thiết bị, dùng FFmpeg đã quản lý; có hủy, giữ hội thoại đích và chặn kết quả sai tài khoản. Chưa kiểm tra gửi/nhận thật.
+- **Markdown mở rộng:** khối mã có sao chép, bảng, danh sách đánh số và tùy chọn bật/tắt/kiểu dấu sao; giữ renderer mention/emoji của fork.
+- **Tự chuẩn bị công cụ gọi video:** cài FFmpeg trong app khi còn thiếu, có tiến độ/dừng/kiểm tra lại; macOS dùng binary riêng có kiểm tra SHA-256 và nhận ngay sau cài, không cần Homebrew.
 - **Cài trên macOS không bị Gatekeeper chặn, miễn phí:** Homebrew tap `minhkhang1008/tap` hoặc trình cài đặt mã nguồn mở `scripts/install-macos.sh` (một lệnh `curl … | bash`): in rõ từng bước, kiểm tra SHA-256 và chữ ký, hỏi trước khi cài, chỉ gỡ cờ cách ly cho riêng app.
 - **Chứng nhận nguồn gốc bản build:** mỗi tệp phát hành được GitHub chứng nhận do workflow công khai build ra (`gh attestation verify <tệp> --repo minhkhang1008/ctdozlite-next`); tap Homebrew tự cập nhật theo bản phát hành khi có secret `HOMEBREW_TAP_TOKEN`.
 

@@ -15,6 +15,18 @@ pub const PREVIEW_LIMIT: usize = 16 * 1024 * 1024;
 pub const HTML_LIMIT: usize = 128 * 1024;
 pub const TEXTURE_BUDGET: u64 = 128 * 1024 * 1024;
 pub const DISK_BUDGET: u64 = 512 * 1024 * 1024;
+
+/// Build a redirect-free client with no cookie jar for observed Zalo media CDN downloads.
+///
+/// # Errors
+/// Returns an error when the TLS client cannot be constructed.
+pub fn credential_free_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .user_agent("ctdozlite-next-media/0.2")
+        .build()
+}
 pub const ACTIVE_JOBS: usize = 4;
 pub const PENDING_JOBS: usize = 128;
 
@@ -212,11 +224,24 @@ pub async fn stream_original(
     generation: &RequestGeneration,
     ticket: u64,
 ) -> Result<u64, MediaError> {
+    stream_original_with_progress(client, url, destination, generation, ticket, |_, _| {}).await
+}
+
+/// Stream an original with bounded progress notifications. The callback runs on the worker
+/// runtime and must stay cheap; it never receives media bytes.
+pub async fn stream_original_with_progress(
+    client: &reqwest::Client,
+    url: &str,
+    destination: &Path,
+    generation: &RequestGeneration,
+    ticket: u64,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<u64, MediaError> {
     generation.check(ticket)?;
     let operation = async {
         let mut response = client
             .get(url)
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(600))
             .send()
             .await
             .map_err(network_error)?;
@@ -229,6 +254,8 @@ pub async fn stream_original(
         }
         let mut file = AtomicPrivateFile::create(destination, &ticket.to_string())?;
         let mut total = 0u64;
+        let expected = response.content_length().unwrap_or(0);
+        let mut last_progress = std::time::Instant::now();
         while let Some(chunk) = response.chunk().await.map_err(network_error)? {
             generation.check(ticket)?;
             if chunk.len() as u64 > DISK_BUDGET.saturating_sub(total) {
@@ -236,12 +263,17 @@ pub async fn stream_original(
             }
             file.write_all(&chunk)?;
             total += chunk.len() as u64;
+            if last_progress.elapsed() >= Duration::from_millis(100) {
+                progress(total, expected);
+                last_progress = std::time::Instant::now();
+            }
         }
         generation.check(ticket)?;
         file.commit()?;
+        progress(total, expected.max(total));
         Ok(total)
     };
-    tokio::time::timeout(Duration::from_secs(125), operation)
+    tokio::time::timeout(Duration::from_secs(605), operation)
         .await
         .unwrap_or(Err(MediaError::Timeout))
 }
@@ -256,13 +288,7 @@ impl PrivateMediaCache {
             return Err(MediaError::AccountMismatch);
         }
         let directory = root.join(format!("{:x}", Sha256::digest(account.as_bytes())));
-        std::fs::create_dir_all(&directory).map_err(|_| MediaError::Io)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-                .map_err(|_| MediaError::Io)?;
-        }
+        crate::data_dir::ensure_private_dir(&directory).map_err(|_| MediaError::Io)?;
         Ok(Self {
             directory,
             account: account.to_owned(),

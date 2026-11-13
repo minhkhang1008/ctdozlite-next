@@ -22,6 +22,28 @@ fn split_even_odd(s: &str) -> (Vec<char>, Vec<char>) {
     (even, odd)
 }
 
+/// Generate a cryptographically random base62 identifier for Sync V2.
+///
+/// # Errors
+/// Returns an error when the operating system cannot provide entropy.
+pub fn random_base62(len: usize) -> Result<String> {
+    const ALPHABET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut out = String::with_capacity(len);
+    while out.len() < len {
+        let mut bytes = [0u8; 64];
+        getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS entropy unavailable: {e}"))?;
+        for byte in bytes {
+            if byte < 248 {
+                out.push(ALPHABET[(byte % 62) as usize] as char);
+            }
+            if out.len() == len {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `Math.random().toString(16).substr(2, n)` — 8 random hex chars would be 4 bytes;
 /// the bundle produces 6..12 hex chars.
 pub fn random_hex(len: usize) -> String {
@@ -147,6 +169,16 @@ impl ParamCipher {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sync_identifiers_are_random_base62() {
+        let first = super::random_base62(32).unwrap();
+        let second = super::random_base62(32).unwrap();
+        assert_eq!(first.len(), 32);
+        assert!(first.bytes().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(first, second);
+        assert_eq!(super::random_base62(0).unwrap(), "");
+    }
+
     use super::*;
 
     #[test]

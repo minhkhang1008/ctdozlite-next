@@ -37,7 +37,8 @@ use wasmtime::{Caller, Engine, Extern, Func, Instance, Linker, Memory, Module, S
 
 /// Locate `libzproto_wasm_bg.*.wasm` without bundling it in the repo:
 /// 1. `CTDOZLITE_ZPROTO_WASM` absolute path, 2. installed Zalo PC, 3. dev
-/// copy under `scripts/assets`. Returns `None` when not found (callers turn
+/// own app bundle `Contents/Resources`, then dev copy under `scripts/assets`.
+/// Returns `None` when not found (callers turn
 /// this into a clear error telling the user to install Zalo PC or set the
 /// env var).
 pub fn find_wasm_path() -> Option<PathBuf> {
@@ -47,7 +48,17 @@ pub fn find_wasm_path() -> Option<PathBuf> {
             return Some(p);
         }
     }
+    let cached = crate::sync_runtime::cached_path();
+    if cached.is_file() {
+        return Some(cached);
+    }
     let mut roots: Vec<PathBuf> = Vec::new();
+    // Upstream 1203b97: Finder launches must discover resources beside the executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(resources) = bundle_resources(&exe) {
+            roots.push(resources);
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         roots.push(PathBuf::from(
@@ -87,6 +98,13 @@ pub fn find_wasm_path() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn bundle_resources(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents")
+        .then(|| contents.join("Resources"))
 }
 
 fn glob_wasm(dir: &Path, depth: u32) -> Option<PathBuf> {
@@ -147,7 +165,7 @@ enum JsVal {
         view: Option<(u32, u32)>,
     },
     /// Shared dummy for GLOBAL / process / versions / crypto / require etc.
-    Dummy,
+    Dummy(&'static str),
     /// Callable marker for the getrandom shim dispatch.
     Func(FuncKind),
     Err(String),
@@ -170,12 +188,12 @@ impl HostState {
             Some(JsVal::True),
             Some(JsVal::False),
         ];
-        heap.push(Some(JsVal::Dummy)); // 4: global
-        heap.push(Some(JsVal::Dummy)); // 5: process
-        heap.push(Some(JsVal::Dummy)); // 6: versions
-        heap.push(Some(JsVal::Dummy)); // 7: truthy `process.versions.node`
-        heap.push(Some(JsVal::Dummy)); // 8: crypto
-        heap.push(Some(JsVal::Dummy)); // 9: require("crypto")
+        heap.push(Some(JsVal::Dummy("global"))); // 4
+        heap.push(Some(JsVal::Dummy("process"))); // 5
+        heap.push(Some(JsVal::Dummy("versions"))); // 6
+        heap.push(Some(JsVal::Dummy("node"))); // 7: truthy `process.versions.node`
+        heap.push(Some(JsVal::Dummy("crypto"))); // 8
+        heap.push(Some(JsVal::Dummy("require_crypto"))); // 9: require("crypto")
         heap.push(Some(JsVal::Func(FuncKind::GetRandomValues))); // 10
         heap.push(Some(JsVal::Func(FuncKind::RandomFillSync))); // 11
         heap.push(Some(JsVal::Func(FuncKind::Require))); // 12
@@ -337,7 +355,7 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         |caller: Caller<'_, HostState>, idx: u32| -> i32 {
             matches!(
                 caller.data().get(idx),
-                JsVal::Dummy | JsVal::U8 { .. } | JsVal::Func(_) | JsVal::Err(_)
+                JsVal::Dummy(_) | JsVal::U8 { .. } | JsVal::Func(_) | JsVal::Err(_)
             ) as i32
         },
     )?;
@@ -367,12 +385,16 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
         "wbg",
         "__wbg_new_78feb108b6472713",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("array"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_new_405e22f390576ce2",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("object"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
@@ -406,17 +428,58 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
         "wbg",
         "__wbg_set_65595bdd868b3009",
-        |mut caller: Caller<'_, HostState>, arr: u32, src: u32, off: u32| {
-            // `a(e).set(a(t), off)` — views write through to WASM memory.
-            let m = mem_of(&mut caller);
-            let src_bytes = u8_bytes(&caller, m, src);
-            if let JsVal::U8 {
-                view: Some((ptr, _)),
-                ..
-            } = caller.data().get(arr).clone()
-            {
-                write_bytes(&mut caller, m, ptr + off, &src_bytes);
+        |mut caller: Caller<'_, HostState>,
+         arr: u32,
+         src: u32,
+         off: u32|
+         -> Result<(), wasmtime::Error> {
+            // TypedArray.set writes through a view, but never grows a fixed-length array.
+            let memory = mem_of(&mut caller);
+            let source = u8_bytes(&caller, memory, src);
+            let end = (off as usize)
+                .checked_add(source.len())
+                .ok_or_else(|| wasmtime::Error::msg("TypedArray.set length overflow"))?;
+            match caller.data().get(arr).clone() {
+                JsVal::U8 {
+                    view: Some((ptr, len)),
+                    ..
+                } => {
+                    if end > len as usize {
+                        return Err(wasmtime::Error::msg("TypedArray.set exceeds view"));
+                    }
+                    let dest = ptr
+                        .checked_add(off)
+                        .ok_or_else(|| wasmtime::Error::msg("TypedArray.set pointer overflow"))?;
+                    if !(dest as usize)
+                        .checked_add(source.len())
+                        .is_some_and(|end| end <= memory.data_size(&caller))
+                    {
+                        return Err(wasmtime::Error::msg("TypedArray.set exceeds memory"));
+                    }
+                    write_bytes(&mut caller, memory, dest, &source);
+                }
+                JsVal::U8 { view: None, .. } => {
+                    let target = caller
+                        .data_mut()
+                        .heap
+                        .get_mut(arr as usize)
+                        .and_then(Option::as_mut);
+                    if let Some(JsVal::U8 { bytes, .. }) = target {
+                        let dest = bytes
+                            .get_mut(off as usize..end)
+                            .ok_or_else(|| wasmtime::Error::msg("TypedArray.set exceeds array"))?;
+                        dest.copy_from_slice(&source);
+                    } else {
+                        return Err(wasmtime::Error::msg("TypedArray.set target missing"));
+                    }
+                }
+                _ => {
+                    return Err(wasmtime::Error::msg(
+                        "TypedArray.set target is not an array",
+                    ))
+                }
             }
+            Ok(())
         },
     )?;
     linker.func_wrap(
@@ -454,12 +517,33 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         "wbg",
         "__wbg_new_a12002a7f91c75be",
         |mut caller: Caller<'_, HostState>, src: u32| -> u32 {
-            let m = mem_of(&mut caller);
-            let b = u8_bytes(&caller, m, src);
-            caller.data_mut().alloc(JsVal::U8 {
-                bytes: b,
-                view: None,
-            })
+            // `new Uint8Array(src)`: views stay views (JS shares the buffer —
+            // copying breaks `getUint8Memory().set(...)` write-through).
+            // Only owned sources are copied.
+            match caller.data().get(src).clone() {
+                JsVal::U8 { view: Some(v), .. } => caller.data_mut().alloc(JsVal::U8 {
+                    bytes: Vec::new(),
+                    view: Some(v),
+                }),
+                // `new Uint8Array(arraybuffer)`: whole-memory view (JS shares
+                // the buffer — `getUint8Memory().set()` must write through).
+                JsVal::Dummy("arraybuffer") => {
+                    let m = mem_of(&mut caller);
+                    let view = (0u32, m.data_size(&caller) as u32);
+                    caller.data_mut().alloc(JsVal::U8 {
+                        bytes: Vec::new(),
+                        view: Some(view),
+                    })
+                }
+                _ => {
+                    let m = mem_of(&mut caller);
+                    let b = u8_bytes(&caller, m, src);
+                    caller.data_mut().alloc(JsVal::U8 {
+                        bytes: b,
+                        view: None,
+                    })
+                }
+            }
         },
     )?;
     linker.func_wrap(
@@ -507,7 +591,7 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         "wbg",
         "__wbg_buffer_609cc3eee51ed158",
         |mut caller: Caller<'_, HostState>, _arr: u32| -> u32 {
-            caller.data_mut().alloc(JsVal::Dummy)
+            caller.data_mut().alloc(JsVal::Dummy("arraybuffer"))
         },
     )?;
 
@@ -518,28 +602,36 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
         "wbg",
         "__wbg_static_accessor_GLOBAL_88a902d13a557d07",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("global"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_static_accessor_GLOBAL_THIS_56578be7e9f832b0",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("global"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_static_accessor_WINDOW_5de37043a91a9c40",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("global"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_static_accessor_SELF_37c5d418e4bf5819",
-        |mut caller: Caller<'_, HostState>| -> u32 { caller.data_mut().alloc(JsVal::Dummy) },
+        |mut caller: Caller<'_, HostState>| -> u32 {
+            caller.data_mut().alloc(JsVal::Dummy("global"))
+        },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_crypto_ed58b8e10a292839",
         |mut caller: Caller<'_, HostState>, _o: u32| -> u32 {
-            caller.data_mut().alloc(JsVal::Dummy)
+            caller.data_mut().alloc(JsVal::Dummy("crypto"))
         },
     )?;
     linker.func_wrap(
@@ -554,21 +646,21 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         "wbg",
         "__wbg_process_5c1d670bc53614b8",
         |mut caller: Caller<'_, HostState>, _o: u32| -> u32 {
-            caller.data_mut().alloc(JsVal::Dummy)
+            caller.data_mut().alloc(JsVal::Dummy("process"))
         },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_versions_c71aa1626a93e0a1",
         |mut caller: Caller<'_, HostState>, _o: u32| -> u32 {
-            caller.data_mut().alloc(JsVal::Dummy)
+            caller.data_mut().alloc(JsVal::Dummy("versions"))
         },
     )?;
     linker.func_wrap(
         "wbg",
         "__wbg_node_02999533c4ea02e3",
         |mut caller: Caller<'_, HostState>, _o: u32| -> u32 {
-            caller.data_mut().alloc(JsVal::Dummy)
+            caller.data_mut().alloc(JsVal::Dummy("node"))
         },
     )?;
     linker.func_wrap(
@@ -631,17 +723,7 @@ fn add_imports(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          _crypto: u32,
          arr: u32|
          -> Result<(), wasmtime::Error> {
-            let m = mem_of(&mut caller);
-            if let JsVal::U8 {
-                view: Some((ptr, len)),
-                ..
-            } = caller.data().get(arr).clone()
-            {
-                let mut buf = vec![0u8; len as usize];
-                fill_random(&mut buf).map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-                write_bytes(&mut caller, m, ptr, &buf);
-            }
-            Ok(())
+            fill_u8(&mut caller, arr).map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     )?;
     linker.func_wrap(
@@ -1011,9 +1093,6 @@ impl ZprotoHost {
                     Val::I32(dl as i32),
                     Val::I32(e),
                     Val::I32(el),
-                    // Optional 6th string arg: null → (0, 0).
-                    Val::I32(0),
-                    Val::I32(0),
                 ])
             })?;
             h.call_raw("zprotoSync2DecryptMetadata", &args)?;
@@ -1181,6 +1260,22 @@ pub fn split_frames(blob: &[u8]) -> Result<Vec<Vec<u8>>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundle_resource_path_does_not_depend_on_working_directory() {
+        assert_eq!(
+            bundle_resources(Path::new(
+                "/Applications/ctdozlite.app/Contents/MacOS/ctdozlite"
+            )),
+            Some(PathBuf::from(
+                "/Applications/ctdozlite.app/Contents/Resources"
+            ))
+        );
+        assert_eq!(
+            bundle_resources(Path::new("/tmp/target/debug/ctdozlite")),
+            None
+        );
+    }
+
     fn try_load() -> Option<ZprotoHost> {
         match find_wasm_path() {
             None => {
@@ -1216,6 +1311,23 @@ mod tests {
         assert_eq!(pubk.len(), 33, "pub must be 33 bytes");
         assert_eq!(pubk[0], 0x05, "pub must have 0x05 prefix");
         assert_eq!(privk.len(), 32, "priv must be 32 bytes");
+        let (second_pub, second_priv) = h.generate_keypair().expect("independent keypair");
+        assert_ne!(pubk, second_pub, "fresh keypairs must use OS entropy");
+        assert_ne!(privk, second_priv, "fresh private keys must differ");
+    }
+
+    #[test]
+    fn metadata_decryption_calls_the_eleven_argument_wasm_export() {
+        let Some(host) = try_load() else { return };
+        let (public, private) = host.generate_keypair().unwrap();
+        let error = host
+            .decrypt_metadata(&[], &public, &private, &private, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !error.contains("arguments"),
+            "must reach the crypto decoder: {error}"
+        );
     }
 
     #[test]
