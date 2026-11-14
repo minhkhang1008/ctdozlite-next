@@ -22,7 +22,6 @@ use crate::qr::QrLogin;
 use crate::session::Session;
 
 mod background;
-mod tray;
 mod doc_preview_ui;
 #[cfg(target_os = "macos")]
 mod macos_clipboard;
@@ -34,6 +33,7 @@ mod productivity;
 mod reactions_dialog;
 mod stickers;
 mod theme;
+mod tray;
 mod video_tools_ui;
 // Voice recording has no entry point since the bottom toolbar was removed; kept dormant until a
 // composer-integrated microphone control is designed.
@@ -139,6 +139,13 @@ pub enum GuiEvent {
     AttachmentSent {
         thread_id: String,
         msg: ChatMessage,
+    },
+    QuickMessageImagePicked {
+        request_id: u64,
+        result: Result<Option<String>, String>,
+    },
+    QuickMessageImageDeleted {
+        error: Option<String>,
     },
     StickerImageReady {
         key: String,
@@ -406,16 +413,6 @@ pub struct UpdateCheckResult {
 }
 
 /// Compare semantic versions (`"v0.0.2"` > `"0.0.1"`).
-pub(crate) fn default_quick_reply_items() -> Vec<String> {
-    vec![
-        "Anh/em đang bận chút, lát gọi lại nhé!".into(),
-        "Đang trong cuộc họp, nhắn tin giúp mình nhé.".into(),
-        "Hiện không tiện nghe máy, có việc gì gấp không ạ?".into(),
-        "Đang ngoài đường ồn quá, lát về mình gọi lại nha.".into(),
-    ]
-}
-
-/// Compare semantic versions (`"v0.0.2"` > `"0.0.1"`).
 pub fn is_newer_semver(remote: &str, current: &str) -> bool {
     crate::updater::is_newer_semver(remote, current)
 }
@@ -443,7 +440,6 @@ struct ActiveCallOverlay {
     call_page: usize,
     members_popover_open: bool,
     invite_search_query: String,
-    quick_reply_popover_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -474,6 +470,46 @@ struct VideoPlayerModal {
     started_at: Option<std::time::Instant>,
     duration_seconds: Option<f32>,
     volume: f32,
+}
+
+#[derive(Debug, Clone)]
+struct QuickMessageEditor {
+    editing_index: Option<usize>,
+    shortcut: String,
+    content: String,
+    image_path: Option<String>,
+    original_image_path: Option<String>,
+    image_loading: bool,
+    image_request_id: Option<u64>,
+    error: Option<String>,
+}
+
+impl QuickMessageEditor {
+    fn create() -> Self {
+        Self {
+            editing_index: None,
+            shortcut: String::new(),
+            content: String::new(),
+            image_path: None,
+            original_image_path: None,
+            image_loading: false,
+            image_request_id: None,
+            error: None,
+        }
+    }
+
+    fn edit(index: usize, item: &crate::quick_messages::QuickMessage) -> Self {
+        Self {
+            editing_index: Some(index),
+            shortcut: item.shortcut.clone(),
+            content: item.content.clone(),
+            image_path: item.image_path.clone(),
+            original_image_path: item.image_path.clone(),
+            image_loading: false,
+            image_request_id: None,
+            error: None,
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContactsSubTab {
@@ -528,10 +564,7 @@ struct AppSettings {
     play_notification_sound: bool,
     // 5. Tin nhắn
     quick_messages_enabled: bool,
-    quick_reply_enabled: bool,
-    quick_reply_items: Vec<String>,
-    #[serde(skip)]
-    quick_reply_draft: String,
+    quick_messages: Vec<crate::quick_messages::QuickMessage>,
     hidden_chat_pin_enabled: bool,
     split_priority_inbox: bool,
     excel_paste_mode: String, // "image" | "text" | "ask"
@@ -598,9 +631,7 @@ impl Default for AppSettings {
             enable_notifications: true,
             play_notification_sound: true,
             quick_messages_enabled: true,
-            quick_reply_enabled: true,
-            quick_reply_items: default_quick_reply_items(),
-            quick_reply_draft: String::new(),
+            quick_messages: Vec::new(),
             hidden_chat_pin_enabled: true,
             split_priority_inbox: false,
             excel_paste_mode: "ask".into(),
@@ -633,10 +664,12 @@ impl AppSettings {
     }
 
     fn load_from(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut settings = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str::<Self>(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        settings.quick_messages = crate::quick_messages::sanitize_items(settings.quick_messages);
+        settings
     }
 
     fn save(&self) -> bool {
@@ -811,6 +844,9 @@ pub struct ZaloGuiApp {
     last_composer_edit_at: std::time::Instant,
     composer_sticker_selected: Option<usize>,
     composer_mention_selected: usize,
+    composer_quick_message_selected: usize,
+    quick_message_last_query: String,
+    quick_message_dismissed_for: Option<String>,
     dismissed_mention_suggest_for: String,
     /// Members picked from the @ popover for the current draft; sent as Zalo tags.
     composer_mentions: Vec<crate::chat::MentionPick>,
@@ -860,6 +896,10 @@ pub struct ZaloGuiApp {
     _tray: Option<tray::Tray>,
     settings_modal_open: bool,
     settings_tab: SettingsTab,
+    quick_message_manager_open: bool,
+    quick_message_editor: Option<QuickMessageEditor>,
+    quick_message_delete_confirm: Option<usize>,
+    quick_message_image_request_id: u64,
     notification_authorization: crate::native_notifications::AuthorizationState,
     /// The one-shot macOS permission request at startup has been dispatched.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -1162,6 +1202,9 @@ impl ZaloGuiApp {
             last_composer_edit_at: std::time::Instant::now(),
             composer_sticker_selected: None,
             composer_mention_selected: 0,
+            composer_quick_message_selected: 0,
+            quick_message_last_query: String::new(),
+            quick_message_dismissed_for: None,
             dismissed_mention_suggest_for: String::new(),
             composer_mentions: Vec::new(),
             reply_auto_mention: None,
@@ -1198,6 +1241,10 @@ impl ZaloGuiApp {
             _tray: tray::Tray::new(&cc.egui_ctx),
             settings_modal_open: false,
             settings_tab: SettingsTab::General,
+            quick_message_manager_open: false,
+            quick_message_editor: None,
+            quick_message_delete_confirm: None,
+            quick_message_image_request_id: 0,
             notification_authorization: Default::default(),
             startup_notification_request_sent: false,
             settings: loaded_settings,
@@ -1819,6 +1866,44 @@ impl ZaloGuiApp {
                     }
                     self.status_msg = format!("Đã gửi đính kèm lúc {}", crate::ui::clock());
                 }
+                GuiEvent::QuickMessageImagePicked { request_id, result } => {
+                    let mut old_path = None;
+                    let mut stale_path = None;
+                    if let Some(editor) = self.quick_message_editor.as_mut() {
+                        if editor.image_request_id == Some(request_id) {
+                            editor.image_loading = false;
+                            editor.image_request_id = None;
+                            match result {
+                                Ok(Some(path)) => {
+                                    old_path = editor.image_path.replace(path);
+                                    editor.error = None;
+                                }
+                                Ok(None) => {}
+                                Err(error) => editor.error = Some(error),
+                            }
+                        } else if let Ok(Some(path)) = result {
+                            stale_path = Some(path);
+                        }
+                    } else if let Ok(Some(path)) = result {
+                        stale_path = Some(path);
+                    }
+                    if let Some(path) = old_path.filter(|path| {
+                        self.quick_message_editor
+                            .as_ref()
+                            .and_then(|editor| editor.image_path.as_ref())
+                            != Some(path)
+                    }) {
+                        self.delete_quick_message_image_if_unreferenced(&path);
+                    }
+                    if let Some(path) = stale_path {
+                        self.delete_quick_message_image_if_unreferenced(&path);
+                    }
+                }
+                GuiEvent::QuickMessageImageDeleted { error } => {
+                    if let Some(error) = error {
+                        crate::logger::log_error("gui::quick_message_image_delete", &error);
+                    }
+                }
                 GuiEvent::QuoteSent {
                     client_message_id,
                     thread_id,
@@ -2378,7 +2463,6 @@ impl ZaloGuiApp {
                         call_page: 0,
                         members_popover_open: false,
                         invite_search_query: String::new(),
-                        quick_reply_popover_open: false,
                     });
                     background::show_app(ctx);
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
@@ -3634,6 +3718,142 @@ impl ZaloGuiApp {
         self.status_msg = text.clone();
         self.toast_notice = Some((text, std::time::Instant::now()));
     }
+
+    fn delete_quick_message_image_if_unreferenced(&self, path: &str) {
+        if self
+            .settings
+            .quick_messages
+            .iter()
+            .any(|item| item.image_path.as_deref() == Some(path))
+        {
+            return;
+        }
+        if let Some(tx) = WORKER_TX.get() {
+            let _ = tx.send(WorkerCmd::DeleteQuickMessageImage {
+                path: path.to_string(),
+            });
+        }
+    }
+
+    fn open_quick_message_editor(&mut self, index: Option<usize>) {
+        self.quick_message_editor = index
+            .and_then(|index| {
+                self.settings
+                    .quick_messages
+                    .get(index)
+                    .map(|item| QuickMessageEditor::edit(index, item))
+            })
+            .or_else(|| index.is_none().then(QuickMessageEditor::create));
+    }
+
+    fn cancel_quick_message_editor(&mut self) {
+        if let Some(editor) = self.quick_message_editor.take() {
+            if editor.image_path != editor.original_image_path {
+                if let Some(path) = editor.image_path {
+                    self.delete_quick_message_image_if_unreferenced(&path);
+                }
+            }
+        }
+    }
+
+    fn pick_quick_message_image(&mut self) {
+        let Some(editor) = self.quick_message_editor.as_mut() else {
+            return;
+        };
+        self.quick_message_image_request_id = self.quick_message_image_request_id.wrapping_add(1);
+        let request_id = self.quick_message_image_request_id;
+        editor.image_loading = true;
+        editor.image_request_id = Some(request_id);
+        editor.error = None;
+        if WORKER_TX.get().map_or(true, |tx| {
+            tx.send(WorkerCmd::PickQuickMessageImage { request_id })
+                .is_err()
+        }) {
+            editor.image_loading = false;
+            editor.image_request_id = None;
+            editor.error = Some("Không mở được bộ chọn ảnh".into());
+        }
+    }
+
+    fn commit_quick_message_editor(&mut self) -> Result<(), String> {
+        let Some(mut editor) = self.quick_message_editor.take() else {
+            return Err("Không có tin nhắn nhanh đang chỉnh sửa".into());
+        };
+        editor.shortcut = editor.shortcut.trim().to_string();
+        if let Err(error) = crate::quick_messages::validate_shortcut(
+            &editor.shortcut,
+            &self.settings.quick_messages,
+            editor.editing_index,
+        ) {
+            editor.error = Some(error.clone());
+            self.quick_message_editor = Some(editor);
+            return Err(error);
+        }
+        if editor.content.trim().is_empty() && editor.image_path.is_none() {
+            let error = "Hãy nhập nội dung hoặc đính kèm một ảnh".to_string();
+            editor.error = Some(error.clone());
+            self.quick_message_editor = Some(editor);
+            return Err(error);
+        }
+        if editor.editing_index.is_none()
+            && self.settings.quick_messages.len() >= crate::quick_messages::MAX_ITEMS
+        {
+            let error = format!(
+                "Chỉ lưu tối đa {} tin nhắn nhanh",
+                crate::quick_messages::MAX_ITEMS
+            );
+            editor.error = Some(error.clone());
+            self.quick_message_editor = Some(editor);
+            return Err(error);
+        }
+        if editor
+            .editing_index
+            .is_some_and(|index| index >= self.settings.quick_messages.len())
+        {
+            let error = "Tin nhắn nhanh đã bị thay đổi, hãy mở lại trình chỉnh sửa".to_string();
+            editor.error = Some(error.clone());
+            self.quick_message_editor = Some(editor);
+            return Err(error);
+        }
+        editor.content = editor
+            .content
+            .trim()
+            .chars()
+            .take(crate::quick_messages::MAX_CONTENT_CHARS)
+            .collect();
+        let item = crate::quick_messages::QuickMessage {
+            shortcut: editor.shortcut,
+            content: editor.content,
+            image_path: editor.image_path,
+        };
+        let old_path = if let Some(index) = editor.editing_index {
+            let Some(slot) = self.settings.quick_messages.get_mut(index) else {
+                return Err("Tin nhắn nhanh đã bị thay đổi, hãy mở lại trình chỉnh sửa".into());
+            };
+            let old = slot.image_path.clone();
+            *slot = item;
+            old
+        } else {
+            self.settings.quick_messages.push(item);
+            None
+        };
+        self.settings.save();
+        if let Some(path) = old_path {
+            self.delete_quick_message_image_if_unreferenced(&path);
+        }
+        Ok(())
+    }
+
+    fn remove_quick_message(&mut self, index: usize) {
+        if index >= self.settings.quick_messages.len() {
+            return;
+        }
+        let removed = self.settings.quick_messages.remove(index);
+        self.settings.save();
+        if let Some(path) = removed.image_path {
+            self.delete_quick_message_image_if_unreferenced(&path);
+        }
+    }
 }
 
 impl ZaloGuiApp {
@@ -3682,6 +3902,53 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.theme_mode, mode);
         }
+    }
+
+    #[test]
+    fn quick_messages_roundtrip_and_legacy_call_replies_are_ignored() {
+        let settings: super::AppSettings = serde_json::from_value(serde_json::json!({
+            "quick_messages_enabled": false,
+            "quick_messages": [{
+                "shortcut": "github",
+                "content": "Hồ sơ GitHub",
+                "image_path": "quick-message-images/github.png"
+            }],
+            "quick_reply_enabled": true,
+            "quick_reply_items": ["Mẫu cũ"]
+        }))
+        .unwrap();
+        assert!(!settings.quick_messages_enabled);
+        assert_eq!(settings.quick_messages.len(), 1);
+        assert_eq!(settings.quick_messages[0].shortcut, "github");
+
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert!(saved.get("quick_reply_enabled").is_none());
+        assert!(saved.get("quick_reply_items").is_none());
+        assert_eq!(
+            saved["quick_messages"][0]["image_path"],
+            "quick-message-images/github.png"
+        );
+    }
+
+    #[test]
+    fn settings_load_sanitizes_quick_messages_from_disk() {
+        let temp = crate::data_dir::PrivateTempDir::new("quick-message-settings-test").unwrap();
+        let path = temp.path().join("app_settings.json");
+        crate::data_dir::write_private_file(
+            &path,
+            br#"{
+                "quick_messages": [
+                    {"shortcut":"valid","content":"Xin chao","image_path":null},
+                    {"shortcut":"bad shortcut","content":"Bo qua","image_path":null},
+                    {"shortcut":"empty","content":"","image_path":"../outside.png"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let settings = super::AppSettings::load_from(&path);
+        assert_eq!(settings.quick_messages.len(), 1);
+        assert_eq!(settings.quick_messages[0].shortcut, "valid");
     }
 
     #[test]

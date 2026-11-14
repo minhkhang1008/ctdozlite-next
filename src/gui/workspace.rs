@@ -2784,7 +2784,6 @@ impl ZaloGuiApp {
                                             call_page: 0,
                                             members_popover_open: false,
                                             invite_search_query: String::new(),
-                                            quick_reply_popover_open: false,
                                         });
                                         if let Some(tx) = WORKER_TX.get() {
                                             let _ = tx.send(WorkerCmd::StartCall {
@@ -2850,7 +2849,6 @@ impl ZaloGuiApp {
                                             call_page: 0,
                                             members_popover_open: false,
                                             invite_search_query: String::new(),
-                                            quick_reply_popover_open: false,
                                         });
                                         if let Some(tx) = WORKER_TX.get() {
                                             let _ = tx.send(WorkerCmd::StartCall {
@@ -3438,6 +3436,35 @@ impl ZaloGuiApp {
                     if self.input_message.trim().is_empty() {
                         self.composer_mentions.clear();
                     }
+                    let quick_message_query = if self.settings.quick_messages_enabled
+                        && !posting_restricted
+                    {
+                        crate::quick_messages::composer_query(&self.input_message)
+                            .map(str::to_string)
+                    } else {
+                        None
+                    };
+                    let quick_message_query_now = quick_message_query.clone().unwrap_or_default();
+                    if quick_message_query_now != self.quick_message_last_query {
+                        self.composer_quick_message_selected = 0;
+                        self.quick_message_last_query = quick_message_query_now;
+                    }
+                    let quick_message_candidates: Vec<crate::quick_messages::QuickMessage> =
+                        quick_message_query
+                            .as_deref()
+                            .map(|query| {
+                                crate::quick_messages::matching_items(
+                                    &self.settings.quick_messages,
+                                    query,
+                                )
+                                .into_iter()
+                                .map(|(_, item)| item.clone())
+                                .collect()
+                            })
+                            .unwrap_or_default();
+                    let quick_message_mode = !quick_message_candidates.is_empty()
+                        && self.quick_message_dismissed_for.as_deref()
+                            != Some(self.input_message.as_str());
                     // Composer `@gif <keyword>` command (re-notes/39).
                     let gif_query: Option<String> = if self.settings.enable_gif_search && !posting_restricted {
                         gif_command_query(&self.input_message).map(str::to_string)
@@ -4135,7 +4162,6 @@ impl ZaloGuiApp {
                                         call_page: 0,
                                         members_popover_open: false,
                                         invite_search_query: String::new(),
-                                        quick_reply_popover_open: false,
                                     });
                                     if let Some(tx) = WORKER_TX.get() {
                                         let _ = tx.send(WorkerCmd::StartCall {
@@ -4543,12 +4569,24 @@ impl ZaloGuiApp {
                             // @ popover keyboard navigation. Keys are consumed BEFORE the
                             // TextEdit runs so ↑/↓ don't move the caret, Tab doesn't move focus,
                             // and Enter neither sends nor inserts a newline.
+                            let mut quick_message_key_pick: Option<
+                                crate::quick_messages::QuickMessage,
+                            > = None;
                             let mut mention_key_pick: Option<MentionCandidate> = None;
                             let composer_has_focus = ui.ctx().memory(|m| {
                                 m.has_focus(Id::new(("chat_composer_input", &thread_id)))
                             });
                             // egui drops focus on Escape before this code runs, so handle it
                             // regardless of focus and hand focus back to the composer.
+                            if quick_message_mode
+                                && ui.input_mut(|i| {
+                                    i.consume_key(egui::Modifiers::NONE, Key::Escape)
+                                })
+                            {
+                                self.quick_message_dismissed_for =
+                                    Some(self.input_message.clone());
+                                self.composer_focus_pending = true;
+                            }
                             if !mention_candidates.is_empty()
                                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
                             {
@@ -4587,7 +4625,43 @@ impl ZaloGuiApp {
                                 self.cancel_reply();
                                 self.composer_focus_pending = true;
                             }
-                            if !mention_candidates.is_empty() && composer_has_focus && !is_ime_busy {
+                            if quick_message_mode && composer_has_focus && !is_ime_busy {
+                                let (down, up, pick) = ui.input_mut(|i| {
+                                    let down =
+                                        i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+                                    let up = i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                                    let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                                    if enter {
+                                        i.events.retain(|event| {
+                                            !matches!(
+                                                event,
+                                                egui::Event::Text(text)
+                                                    if text == "\n"
+                                                        || text == "\r"
+                                                        || text == "\r\n"
+                                            )
+                                        });
+                                    }
+                                    (down, up, enter)
+                                });
+                                self.composer_quick_message_selected =
+                                    crate::quick_messages::move_selection(
+                                        self.composer_quick_message_selected,
+                                        quick_message_candidates.len(),
+                                        down,
+                                        up,
+                                    );
+                                if pick {
+                                    quick_message_key_pick = quick_message_candidates
+                                        .get(self.composer_quick_message_selected)
+                                        .cloned();
+                                }
+                            }
+                            if !quick_message_mode
+                                && !mention_candidates.is_empty()
+                                && composer_has_focus
+                                && !is_ime_busy
+                            {
                                 let last = mention_candidates.len() - 1;
                                 self.composer_mention_selected = self.composer_mention_selected.min(last);
                                 let (down, up, pick) = ui.input_mut(|i| {
@@ -4611,7 +4685,7 @@ impl ZaloGuiApp {
                                     mention_key_pick = mention_candidates.get(self.composer_mention_selected).cloned();
                                 }
                             }
-                            if gif_mode && composer_has_focus && !is_ime_busy {
+                            if !quick_message_mode && gif_mode && composer_has_focus && !is_ime_busy {
                                 let n = self.gif_results.len();
                                 let (left, right, up, down, enter) = ui.input_mut(|i| {
                                     let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter);
@@ -4978,7 +5052,10 @@ impl ZaloGuiApp {
                                                                     .id(composer_id)
                                                                     // Tab must pick a suggestion, not move focus (egui reads Tab
                                                                     // at frame start, before the key is consumed above).
-                                                                    .lock_focus(!mention_candidates.is_empty())
+                                                                    .lock_focus(
+                                                                        quick_message_mode
+                                                                            || !mention_candidates.is_empty(),
+                                                                    )
                                                                     .desired_rows(vis_lines)
                                                                     .frame(false)
                                                                     .hint_text(hint_str)
@@ -5003,7 +5080,10 @@ impl ZaloGuiApp {
                                                     .id(composer_id)
                                                     // Tab must pick a suggestion, not move focus (egui reads Tab
                                                     // at frame start, before the key is consumed above).
-                                                    .lock_focus(!mention_candidates.is_empty())
+                                                    .lock_focus(
+                                                        quick_message_mode
+                                                            || !mention_candidates.is_empty(),
+                                                    )
                                                     .frame(false)
                                                     .hint_text(hint_str)
                                                     .font(FontId::proportional(15.0))
@@ -5225,11 +5305,32 @@ impl ZaloGuiApp {
                                         }
                                     });
 
+                                    let mut quick_message_inserted = false;
+                                    if let Some(item) = quick_message_key_pick.take() {
+                                        self.insert_quick_message_into_composer(ctx, &item);
+                                        response.request_focus();
+                                        quick_message_inserted = true;
+                                        if let Some(mut state) =
+                                            egui::TextEdit::load_state(ui.ctx(), composer_id)
+                                        {
+                                            let end = egui::text::CCursor::new(
+                                                self.input_message.chars().count(),
+                                            );
+                                            state.cursor.set_char_range(Some(
+                                                egui::text::CCursorRange::one(end),
+                                            ));
+                                            state.store(ui.ctx(), composer_id);
+                                        }
+                                    }
+
                                     let mut chosen_mention = None;
-                                    if !mention_candidates.is_empty() {
+                                    if !quick_message_mode && !mention_candidates.is_empty() {
                                         // Keys were consumed before the TextEdit (see above).
                                         chosen_mention = mention_key_pick.take();
-                                    } else if !contextual_stickers.is_empty() && response.has_focus() {
+                                    } else if !quick_message_mode
+                                        && !contextual_stickers.is_empty()
+                                        && response.has_focus()
+                                    {
                                         let len = contextual_stickers.len();
                                         if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
                                             self.composer_sticker_selected = Some(0);
@@ -5272,7 +5373,8 @@ impl ZaloGuiApp {
                                         response.request_focus();
                                     }
 
-                                    let enter_pressed = chosen_mention.is_none()
+                                    let enter_pressed = !quick_message_inserted
+                                        && chosen_mention.is_none()
                                         && (response.lost_focus()
                                             || response.has_focus())
                                         && send_via_enter
@@ -5413,7 +5515,18 @@ impl ZaloGuiApp {
                     }
 
                     // 4a. Floating Mention Suggestion Popover (`egui::Area`, rendered AFTER composer bar)
-                    if gif_mode {
+                    let click_chosen_quick_message = if quick_message_mode {
+                        self.render_quick_message_popover(
+                            ctx,
+                            composer_frame.response.rect,
+                            &quick_message_candidates,
+                            self.composer_quick_message_selected,
+                            pal,
+                        )
+                    } else {
+                        None
+                    };
+                    if !quick_message_mode && gif_mode {
                         if let Some(item) = self.render_gif_popover(
                             ctx,
                             composer_frame.response.rect,
@@ -5424,7 +5537,7 @@ impl ZaloGuiApp {
                         }
                     }
                     let mut click_chosen_mention = None;
-                    if !mention_candidates.is_empty() {
+                    if !quick_message_mode && !mention_candidates.is_empty() {
                         if let Some(chosen) = self.render_mention_suggestion_popover(
                             ctx,
                             composer_frame.response.rect,
@@ -5434,7 +5547,10 @@ impl ZaloGuiApp {
                         ) {
                             click_chosen_mention = Some(chosen);
                         }
-                    } else if !contextual_stickers.is_empty() && !self.sticker_picker_open {
+                    } else if !quick_message_mode
+                        && !contextual_stickers.is_empty()
+                        && !self.sticker_picker_open
+                    {
                         self.render_contextual_sticker_popover(
                             ctx,
                             composer_frame.response.rect,
@@ -5445,7 +5561,8 @@ impl ZaloGuiApp {
                         );
                     }
                     if let Some(ref link_meta) = composer_link_preview {
-                        if mention_candidates.is_empty()
+                        if !quick_message_mode
+                            && mention_candidates.is_empty()
                             && contextual_stickers.is_empty()
                             && !self.sticker_picker_open
                         {
@@ -5456,6 +5573,9 @@ impl ZaloGuiApp {
                                 pal,
                             );
                         }
+                    }
+                    if let Some(item) = click_chosen_quick_message {
+                        self.insert_quick_message_into_composer(ctx, &item);
                     }
                     if let Some(cand) = click_chosen_mention {
                         if let Some((at_pos, _)) = active_mention_info {
@@ -6091,6 +6211,189 @@ fn paint_drop_zones(
 }
 
 impl ZaloGuiApp {
+    fn queue_pending_composer_file(
+        &mut self,
+        ctx: &egui::Context,
+        path: std::path::PathBuf,
+    ) -> bool {
+        if self.pending_drop_files.len() >= MAX_PENDING_DROP_FILES
+            || self.pending_drop_files.iter().any(|file| file.path == path)
+        {
+            return false;
+        }
+        let is_image = is_previewable_image(&path);
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "tập tin".to_string());
+        let tx = self.drop_thumb_tx.clone();
+        let repaint = ctx.clone();
+        let job_path = path.clone();
+        std::thread::spawn(move || {
+            let size = std::fs::metadata(&job_path)
+                .ok()
+                .map(|metadata| metadata.len());
+            let image = if is_image && size.is_some_and(|size| size <= MAX_DROP_THUMB_BYTES) {
+                image::open(&job_path).ok().map(|image| {
+                    let thumbnail = image.thumbnail(112, 112).to_rgba8();
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [thumbnail.width() as usize, thumbnail.height() as usize],
+                        thumbnail.as_raw(),
+                    )
+                })
+            } else {
+                None
+            };
+            let _ = tx.send(DropThumb {
+                path: job_path,
+                size,
+                image,
+            });
+            repaint.request_repaint();
+        });
+        self.pending_drop_files.push(PendingDropFile {
+            path,
+            name,
+            is_image,
+            size: None,
+            thumb: None,
+            loaded: false,
+        });
+        true
+    }
+
+    fn insert_quick_message_into_composer(
+        &mut self,
+        ctx: &egui::Context,
+        item: &crate::quick_messages::QuickMessage,
+    ) {
+        let insertion = crate::quick_messages::composer_insertion(item);
+        self.input_message = insertion.text;
+        self.composer_mentions.clear();
+        self.quick_message_dismissed_for = None;
+        self.composer_quick_message_selected = 0;
+        if let Some(relative) = insertion.image_path {
+            match crate::quick_messages::managed_image_path(std::path::Path::new("."), &relative) {
+                Ok(path) => {
+                    if self.pending_drop_files.len() >= MAX_PENDING_DROP_FILES {
+                        self.show_toast(format!(
+                            "Chỉ đính kèm tối đa {MAX_PENDING_DROP_FILES} tệp mỗi lần"
+                        ));
+                    } else if self.pending_drop_files.iter().any(|file| file.path == path) {
+                        self.show_toast("Ảnh của tin nhắn nhanh đã có trong khung soạn thảo");
+                    } else {
+                        self.queue_pending_composer_file(ctx, path);
+                    }
+                }
+                Err(_) => self.show_toast("Đường dẫn ảnh của tin nhắn nhanh không hợp lệ"),
+            }
+        }
+        self.composer_focus_pending = true;
+    }
+
+    fn render_quick_message_popover(
+        &mut self,
+        ctx: &egui::Context,
+        composer_rect: Rect,
+        items: &[crate::quick_messages::QuickMessage],
+        selected: usize,
+        pal: &ThemePalette,
+    ) -> Option<crate::quick_messages::QuickMessage> {
+        if items.is_empty() {
+            return None;
+        }
+        let width = composer_rect.width().clamp(300.0, 560.0);
+        let rows = items.len().min(6) as f32;
+        let height = 42.0 + rows * 54.0;
+        let position = Pos2::new(
+            composer_rect.left() + 8.0,
+            (composer_rect.top() - height - 4.0).max(48.0),
+        );
+        let mut picked = None;
+        egui::Area::new(Id::new("composer_quick_message_popover"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(pal.bg_elevated)
+                    .stroke(Stroke::new(1.0_f32, pal.border))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(10.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 20.0);
+                        ui.label(
+                            RichText::new(
+                                "↑↓ để chọn · Enter để đưa vào khung soạn thảo · Esc để ẩn",
+                            )
+                            .color(pal.text_muted)
+                            .size(11.2),
+                        );
+                        ui.add_space(5.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("quick_message_results")
+                            .max_height(rows * 54.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for (index, item) in items.iter().enumerate() {
+                                    let active = index == selected.min(items.len() - 1);
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        Vec2::new(ui.available_width(), 50.0),
+                                        Sense::click(),
+                                    );
+                                    if active || response.hovered() {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            Rounding::same(6.0),
+                                            if active {
+                                                pal.bg_selected
+                                            } else {
+                                                pal.bg_hover
+                                            },
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        Pos2::new(rect.left() + 8.0, rect.top() + 9.0),
+                                        egui::Align2::LEFT_TOP,
+                                        format!("/{}", item.shortcut),
+                                        FontId::monospace(12.5),
+                                        pal.primary_hover,
+                                    );
+                                    let preview = if item.content.is_empty() {
+                                        "Chỉ đính kèm ảnh".to_string()
+                                    } else {
+                                        truncate_chars(&item.content.replace('\n', " "), 68)
+                                            .into_owned()
+                                    };
+                                    ui.painter().text(
+                                        Pos2::new(rect.left() + 8.0, rect.top() + 29.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        preview,
+                                        FontId::proportional(12.0),
+                                        pal.text_secondary,
+                                    );
+                                    if item.image_path.is_some() {
+                                        ui.painter().text(
+                                            Pos2::new(rect.right() - 10.0, rect.center().y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            lucide::IMAGE,
+                                            FontId::proportional(15.0),
+                                            pal.text_muted,
+                                        );
+                                    }
+                                    if active {
+                                        ui.scroll_to_rect(rect, None);
+                                    }
+                                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                                    {
+                                        picked = Some(item.clone());
+                                    }
+                                }
+                            });
+                    });
+            });
+        picked
+    }
+
     /// Route files released over the chat: send now, or attach to the composer for review.
     fn handle_dropped_files(
         &mut self,
@@ -6133,47 +6436,7 @@ impl ZaloGuiApp {
                         ));
                         break;
                     }
-                    if self.pending_drop_files.iter().any(|f| f.path == path) {
-                        continue;
-                    }
-                    let is_image = is_previewable_image(&path);
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "tập tin".to_string());
-                    // Size and thumbnail are read off the UI thread.
-                    let tx = self.drop_thumb_tx.clone();
-                    let repaint = ctx.clone();
-                    let job_path = path.clone();
-                    std::thread::spawn(move || {
-                        let size = std::fs::metadata(&job_path).ok().map(|m| m.len());
-                        let image = if is_image && size.is_some_and(|s| s <= MAX_DROP_THUMB_BYTES) {
-                            image::open(&job_path).ok().map(|img| {
-                                let t = img.thumbnail(112, 112).to_rgba8();
-                                egui::ColorImage::from_rgba_unmultiplied(
-                                    [t.width() as usize, t.height() as usize],
-                                    t.as_raw(),
-                                )
-                            })
-                        } else {
-                            None
-                        };
-                        let _ = tx.send(DropThumb {
-                            path: job_path,
-                            size,
-                            image,
-                        });
-                        repaint.request_repaint();
-                    });
-                    self.pending_drop_files.push(PendingDropFile {
-                        path,
-                        name,
-                        is_image,
-                        size: None,
-                        thumb: None,
-                        loaded: false,
-                    });
-                    added += 1;
+                    added += usize::from(self.queue_pending_composer_file(ctx, path));
                 }
                 if added > 0 {
                     self.composer_focus_pending = true;

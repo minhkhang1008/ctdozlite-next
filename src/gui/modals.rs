@@ -1271,6 +1271,15 @@ impl ZaloGuiApp {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            if self.quick_message_editor.is_some() {
+                self.cancel_quick_message_editor();
+                return;
+            }
+            if self.quick_message_manager_open {
+                self.quick_message_manager_open = false;
+                self.quick_message_delete_confirm = None;
+                return;
+            }
             self.settings_modal_open = false;
             self.settings_blur_tex = None;
             self.settings_blur_req_at = None;
@@ -1788,19 +1797,10 @@ impl ZaloGuiApp {
                                                             );
                                                         }
                                                     });
-                                                    ui.horizontal(|ui| {
-                                                        if ui
-                                                            .small_button("💬 Mẫu phản hồi nhanh khi từ chối cuộc gọi →")
-                                                            .on_hover_cursor(CursorIcon::PointingHand)
-                                                            .clicked()
-                                                        {
-                                                            self.settings_tab = SettingsTab::Messages;
+                                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                        if ui.small_button(format!("{} Quét lại thiết bị", lucide::REFRESH)).clicked() {
+                                                            if let Some(tx) = WORKER_TX.get() { let _ = tx.send(WorkerCmd::RefreshVideoTools); }
                                                         }
-                                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                            if ui.small_button(format!("{} Quét lại thiết bị", lucide::REFRESH)).clicked() {
-                                                                if let Some(tx) = WORKER_TX.get() { let _ = tx.send(WorkerCmd::RefreshVideoTools); }
-                                                            }
-                                                        });
                                                     });
                                                 });
                                             ui.add_space(14.0);
@@ -2709,150 +2709,11 @@ impl ZaloGuiApp {
                                                 });
                                         }
                                         SettingsTab::Messages => {
-                                            if ui.checkbox(&mut self.settings.render_markdown,"Hiển thị Markdown (mã, bảng, danh sách)").changed() | ui.checkbox(&mut self.settings.zalo_single_star_bold,"Kiểu Zalo: *một sao* là chữ đậm").changed() {self.settings.save();}
-
-                                            egui::Frame::none()
-                                                .fill(pal.bg_elevated)
-                                                .stroke(Stroke::new(1.0_f32, pal.border))
-                                                .rounding(Rounding::same(8.0))
-                                                .inner_margin(Margin::symmetric(14.0, 10.0))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(RichText::new("Tin nhắn nhanh").color(pal.text_primary).size(13.2));
-                                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                            render_toggle_switch(ui, &mut self.settings.quick_messages_enabled, pal);
-                                                        });
-                                                    });
-                                                });
-                                            ui.add_space(14.0);
-
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    RichText::new("Phản hồi nhanh khi từ chối cuộc gọi")
-                                                        .color(pal.text_primary)
-                                                        .size(13.5)
-                                                        .strong(),
-                                                );
-                                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                    if ui
-                                                        .small_button("Khôi phục mặc định")
-                                                        .on_hover_cursor(CursorIcon::PointingHand)
-                                                        .clicked()
-                                                    {
-                                                        self.settings.quick_reply_items =
-                                                            crate::gui::default_quick_reply_items();
-                                                        self.settings.save();
-                                                    }
-                                                });
-                                            });
-                                            ui.add_space(2.0);
-                                            ui.label(
-                                                RichText::new(
-                                                    "Từ chối cuộc gọi đến kèm tin nhắn soạn sẵn (tối đa 5 mẫu)",
-                                                )
-                                                .color(pal.text_secondary)
-                                                .size(12.0),
-                                            );
-                                            ui.add_space(6.0);
-                                            egui::Frame::none()
-                                                .fill(pal.bg_elevated)
-                                                .stroke(Stroke::new(1.0_f32, pal.border))
-                                                .rounding(Rounding::same(8.0))
-                                                .inner_margin(Margin::symmetric(14.0, 10.0))
-                                                .show(ui, |ui| {
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(
-                                                            RichText::new("Bật phản hồi nhanh trên màn hình cuộc gọi đến")
-                                                                .color(pal.text_primary)
-                                                                .size(13.0),
-                                                        );
-                                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                            render_toggle_switch(
-                                                                ui,
-                                                                &mut self.settings.quick_reply_enabled,
-                                                                pal,
-                                                            );
-                                                        });
-                                                    });
-                                                    ui.add_space(8.0);
-                                                    let mut remove_idx: Option<usize> = None;
-                                                    let mut qr_changed = false;
-                                                    for (idx, item) in
-                                                        self.settings.quick_reply_items.iter_mut().enumerate()
-                                                    {
-                                                        ui.horizontal(|ui| {
-                                                            let w = (ui.available_width() - 34.0).max(120.0);
-                                                            if ui
-                                                                .add_sized(
-                                                                    [w, 26.0],
-                                                                    egui::TextEdit::singleline(item)
-                                                                        .char_limit(120),
-                                                                )
-                                                                .changed()
-                                                            {
-                                                                qr_changed = true;
-                                                            }
-                                                            if ui
-                                                                .add(
-                                                                    egui::Button::new(
-                                                                        RichText::new("×")
-                                                                            .color(pal.danger)
-                                                                            .size(13.5)
-                                                                            .strong(),
-                                                                    )
-                                                                    .min_size(Vec2::new(24.0, 24.0)),
-                                                                )
-                                                                .on_hover_text("Xóa mẫu này")
-                                                                .clicked()
-                                                            {
-                                                                remove_idx = Some(idx);
-                                                            }
-                                                        });
-                                                        ui.add_space(4.0);
-                                                    }
-                                                    if qr_changed {
-                                                        self.settings.save();
-                                                    }
-                                                    if let Some(ri) = remove_idx {
-                                                        if ri < self.settings.quick_reply_items.len() {
-                                                            self.settings.quick_reply_items.remove(ri);
-                                                            self.settings.save();
-                                                        }
-                                                    }
-                                                    if self.settings.quick_reply_items.len() < 5 {
-                                                        ui.horizontal(|ui| {
-                                                            let w = (ui.available_width() - 68.0).max(110.0);
-                                                            let resp = ui.add_sized(
-                                                                [w, 26.0],
-                                                                egui::TextEdit::singleline(
-                                                                    &mut self.settings.quick_reply_draft,
-                                                                )
-                                                                .hint_text("Nhập mẫu phản hồi nhanh mới…")
-                                                                .char_limit(120),
-                                                            );
-                                                            let enter = resp.lost_focus()
-                                                                && ui.input(|i| i.key_pressed(Key::Enter));
-                                                            if (ui.button("+ Thêm").clicked() || enter)
-                                                                && !self
-                                                                    .settings
-                                                                    .quick_reply_draft
-                                                                    .trim()
-                                                                    .is_empty()
-                                                            {
-                                                                let text = self
-                                                                    .settings
-                                                                    .quick_reply_draft
-                                                                    .trim()
-                                                                    .chars()
-                                                                    .take(120)
-                                                                    .collect::<String>();
-                                                                self.settings.quick_reply_items.push(text);
-                                                                self.settings.quick_reply_draft.clear();
-                                                                self.settings.save();
-                                                            }
-                                                        });
-                                                    }
-                                                });
+                                            if self.quick_message_manager_open || self.quick_message_editor.is_some() {
+                                                self.render_quick_message_manager(ui, pal);
+                                            } else {
+                                                if ui.checkbox(&mut self.settings.render_markdown,"Hiển thị Markdown (mã, bảng, danh sách)").changed() | ui.checkbox(&mut self.settings.zalo_single_star_bold,"Kiểu Zalo: *một sao* là chữ đậm").changed() {self.settings.save();}
+                                                self.render_quick_message_overview(ui, pal);
                                             ui.add_space(14.0);
 
                                             ui.label(RichText::new("Thiết lập ẩn trò chuyện").color(pal.text_primary).size(13.5).strong());
@@ -2960,6 +2821,7 @@ impl ZaloGuiApp {
                                                         });
                                                     });
                                                 });
+                                            }
                                         }
                                         SettingsTab::Utilities => {
                                             ui.label(RichText::new("Gợi ý Sticker").color(pal.text_primary).size(13.5).strong());
@@ -3665,6 +3527,9 @@ impl ZaloGuiApp {
         }
 
         if !open {
+            self.cancel_quick_message_editor();
+            self.quick_message_manager_open = false;
+            self.quick_message_delete_confirm = None;
             self.settings_modal_open = false;
             self.settings_blur_tex = None;
             self.settings_blur_req_at = None;
@@ -5097,65 +4962,7 @@ impl ZaloGuiApp {
                                 });
                             });
                         } else if call.is_incoming_ringing {
-                            let can_quick_reply = !call.is_group
-                                && self.settings.quick_reply_enabled
-                                && !self.settings.quick_reply_items.is_empty();
-                            if can_quick_reply && call.quick_reply_popover_open {
-                                let mut picked_tpl: Option<String> = None;
-                                egui::Frame::none()
-                                    .fill(Color32::from_rgb(17, 24, 39))
-                                    .rounding(Rounding::same(10.0))
-                                    .stroke(Stroke::new(1.0_f32, pal.border))
-                                    .inner_margin(Margin::symmetric(10.0, 8.0))
-                                    .show(ui, |ui| {
-                                        ui.set_max_width(340.0);
-                                        ui.label(
-                                            RichText::new("Chọn tin nhắn để từ chối & gửi ngay:")
-                                                .size(11.5)
-                                                .color(pal.text_muted),
-                                        );
-                                        ui.add_space(4.0);
-                                        for tpl in &self.settings.quick_reply_items {
-                                            let btn = egui::Button::new(
-                                                RichText::new(tpl.as_str())
-                                                    .size(12.5)
-                                                    .color(pal.text_primary),
-                                            )
-                                            .fill(Color32::from_rgb(30, 41, 59))
-                                            .rounding(Rounding::same(6.0))
-                                            .min_size(Vec2::new(320.0, 28.0));
-                                            if ui
-                                                .add(btn)
-                                                .on_hover_cursor(CursorIcon::PointingHand)
-                                                .clicked()
-                                            {
-                                                picked_tpl = Some(tpl.clone());
-                                            }
-                                            ui.add_space(2.0);
-                                        }
-                                    });
-                                ui.add_space(6.0);
-                                if let Some(tpl) = picked_tpl {
-                                    if let Some(tx) = WORKER_TX.get() {
-                                        let _ = tx.send(WorkerCmd::AnswerCall {
-                                            accept: false,
-                                            cam_start_off: false,
-                                        });
-                                        let _ = tx.send(WorkerCmd::SendMessage {
-                                            to_id: call.partner_id.clone(),
-                                            text: tpl,
-                                            is_group: false,
-                                            mentions: Vec::new(),
-                                        });
-                                    }
-                                    self.show_toast("Đã từ chối và gửi phản hồi nhanh");
-                                    self.active_call = None;
-                                }
-                            }
-
-                            let n_btns = 2
-                                + usize::from(call.is_video)
-                                + usize::from(can_quick_reply);
+                            let n_btns = 2 + usize::from(call.is_video);
                             let dock_w = match n_btns {
                                 4 => 320.0_f32,
                                 3 => 248.0_f32,
@@ -5208,49 +5015,6 @@ impl ZaloGuiApp {
                                                 .color(pal.text_secondary),
                                         );
                                     });
-
-                                    // 1b) Quick Reply on Call Reject button (`Phản hồi nhanh`)
-                                    if can_quick_reply {
-                                        ui.vertical_centered(|ui| {
-                                            let (qr_r, qr_resp) = ui.allocate_exact_size(
-                                                Vec2::splat(52.0),
-                                                Sense::click(),
-                                            );
-                                            let qr_bg = if call.quick_reply_popover_open {
-                                                pal.primary.linear_multiply(0.38)
-                                            } else if qr_resp.hovered() {
-                                                Color32::from_rgb(51, 65, 85)
-                                            } else {
-                                                Color32::from_rgb(30, 41, 59)
-                                            };
-                                            ui.painter().circle_filled(qr_r.center(), 25.0, qr_bg);
-                                            ui.painter().circle_stroke(
-                                                qr_r.center(),
-                                                25.0,
-                                                Stroke::new(1.2_f32, pal.border),
-                                            );
-                                            draw_lucide_icon(
-                                                ui.painter(),
-                                                qr_r.center(),
-                                                lucide::MESSAGE_SQUARE,
-                                                19.0,
-                                                Color32::WHITE,
-                                            );
-                                            if qr_resp
-                                                .on_hover_cursor(CursorIcon::PointingHand)
-                                                .on_hover_text("Từ chối & gửi tin nhắn phản hồi nhanh")
-                                                .clicked()
-                                            {
-                                                call.quick_reply_popover_open =
-                                                    !call.quick_reply_popover_open;
-                                            }
-                                            ui.label(
-                                                RichText::new("Phản hồi")
-                                                    .size(11.0)
-                                                    .color(pal.text_primary),
-                                            );
-                                        });
-                                    }
 
                                     // 2) Answer Video Call with Camera Off (`camStartOff`)
                                     if call.is_video {
@@ -9565,6 +9329,333 @@ fn extract_markdown_links_inline(s: &str) -> String {
     out
 }
 
+impl ZaloGuiApp {
+    fn render_quick_message_overview(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        egui::Frame::none()
+            .fill(pal.bg_elevated)
+            .stroke(Stroke::new(1.0_f32, pal.border))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(14.0, 10.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Tin nhắn nhanh")
+                                .color(pal.text_primary)
+                                .size(13.2)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new("Gõ / trong khung soạn thảo để chọn một mẫu")
+                                .color(pal.text_secondary)
+                                .size(11.8),
+                        );
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if render_toggle_switch(ui, &mut self.settings.quick_messages_enabled, pal)
+                            .changed()
+                        {
+                            self.settings.save();
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(5.0);
+                let manage = ui
+                    .add_sized(
+                        [ui.available_width(), 30.0],
+                        egui::Button::new(
+                            RichText::new(format!(
+                                "Quản lý tin nhắn nhanh ({})  ›",
+                                self.settings.quick_messages.len()
+                            ))
+                            .color(pal.text_primary)
+                            .size(12.8),
+                        )
+                        .fill(Color32::TRANSPARENT),
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                if manage.clicked() {
+                    self.quick_message_manager_open = true;
+                    self.quick_message_delete_confirm = None;
+                }
+            });
+    }
+
+    fn render_quick_message_manager(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        if self.quick_message_editor.is_some() {
+            self.render_quick_message_editor(ui, pal);
+            return;
+        }
+
+        let mut back = false;
+        let mut create = false;
+        let mut edit = None;
+        let mut remove = None;
+        ui.horizontal(|ui| {
+            back = ui
+                .button(RichText::new("‹ Quay lại").color(pal.text_primary))
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .clicked();
+            ui.label(
+                RichText::new(format!(
+                    "Tin nhắn nhanh ({})",
+                    self.settings.quick_messages.len()
+                ))
+                .color(pal.text_primary)
+                .size(15.0)
+                .strong(),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                create = ui
+                    .button(RichText::new("+ Tạo mới").color(pal.primary_hover).strong())
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked();
+            });
+        });
+        ui.add_space(8.0);
+
+        if self.settings.quick_messages.is_empty() {
+            egui::Frame::none()
+                .fill(pal.bg_elevated)
+                .stroke(Stroke::new(1.0_f32, pal.border))
+                .rounding(Rounding::same(8.0))
+                .inner_margin(Margin::symmetric(18.0, 24.0))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new("Chưa có tin nhắn nhanh nào")
+                                .color(pal.text_primary)
+                                .size(13.2)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new("Nhấn Tạo mới để thêm phím tắt đầu tiên")
+                                .color(pal.text_secondary)
+                                .size(11.8),
+                        );
+                    });
+                });
+        } else {
+            for (index, item) in self.settings.quick_messages.iter().cloned().enumerate() {
+                egui::Frame::none()
+                    .fill(pal.bg_elevated)
+                    .stroke(Stroke::new(1.0_f32, pal.border))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(12.0, 9.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(format!("/{}", item.shortcut))
+                                        .color(pal.primary_hover)
+                                        .size(12.8)
+                                        .monospace()
+                                        .strong(),
+                                );
+                                let preview = if item.content.is_empty() {
+                                    "Chỉ đính kèm ảnh".to_string()
+                                } else {
+                                    truncate_chars(&item.content.replace('\n', " "), 72)
+                                        .into_owned()
+                                };
+                                ui.label(
+                                    RichText::new(preview).color(pal.text_secondary).size(11.8),
+                                );
+                                if item.image_path.is_some() {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} Có 1 ảnh đính kèm",
+                                            lucide::IMAGE
+                                        ))
+                                        .color(pal.text_muted)
+                                        .size(11.2),
+                                    );
+                                }
+                            });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if self.quick_message_delete_confirm == Some(index) {
+                                    if ui
+                                        .small_button("Xóa")
+                                        .on_hover_cursor(CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        remove = Some(index);
+                                    }
+                                    if ui.small_button("Hủy").clicked() {
+                                        self.quick_message_delete_confirm = None;
+                                    }
+                                } else {
+                                    if ui
+                                        .small_button(format!("{} Xóa", lucide::TRASH_2))
+                                        .on_hover_cursor(CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        self.quick_message_delete_confirm = Some(index);
+                                    }
+                                    if ui
+                                        .small_button("Sửa")
+                                        .on_hover_cursor(CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        edit = Some(index);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                ui.add_space(6.0);
+            }
+        }
+
+        if back {
+            self.quick_message_manager_open = false;
+            self.quick_message_delete_confirm = None;
+        } else if create {
+            self.open_quick_message_editor(None);
+        } else if let Some(index) = edit {
+            self.open_quick_message_editor(Some(index));
+        } else if let Some(index) = remove {
+            self.remove_quick_message(index);
+            self.quick_message_delete_confirm = None;
+            self.show_toast("Đã xóa tin nhắn nhanh");
+        }
+    }
+
+    fn render_quick_message_editor(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        let mut cancel = false;
+        let mut save = false;
+        let mut pick_image = false;
+        let mut remove_image = false;
+        let Some(editor) = self.quick_message_editor.as_mut() else {
+            return;
+        };
+        let title = if editor.editing_index.is_some() {
+            "Chỉnh sửa tin nhắn nhanh"
+        } else {
+            "Tạo tin nhắn nhanh"
+        };
+        ui.horizontal(|ui| {
+            cancel = ui
+                .button(RichText::new("‹ Quay lại").color(pal.text_primary))
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .clicked();
+            ui.label(
+                RichText::new(title)
+                    .color(pal.text_primary)
+                    .size(15.0)
+                    .strong(),
+            );
+        });
+        ui.add_space(8.0);
+        egui::Frame::none()
+            .fill(pal.bg_elevated)
+            .stroke(Stroke::new(1.0_f32, pal.border))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(14.0, 12.0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("Phím tắt")
+                        .color(pal.text_primary)
+                        .size(12.5)
+                        .strong(),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("/").color(pal.text_secondary).size(16.0));
+                    ui.add_sized(
+                        [ui.available_width(), 30.0],
+                        egui::TextEdit::singleline(&mut editor.shortcut)
+                            .hint_text("Ví dụ: gioithieu")
+                            .char_limit(20),
+                    );
+                });
+                ui.label(
+                    RichText::new(format!("{}/20 ký tự", editor.shortcut.chars().count()))
+                        .color(pal.text_muted)
+                        .size(10.8),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Nội dung tin nhắn")
+                        .color(pal.text_primary)
+                        .size(12.5)
+                        .strong(),
+                );
+                ui.add_sized(
+                    [ui.available_width(), 120.0],
+                    egui::TextEdit::multiline(&mut editor.content)
+                        .hint_text("Nhập nội dung sẽ đưa vào khung soạn thảo")
+                        .char_limit(5000),
+                );
+                ui.add_space(8.0);
+                if let Some(path) = editor.image_path.as_deref() {
+                    let name = std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("ảnh đính kèm");
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{} {name}", lucide::IMAGE))
+                                .color(pal.text_secondary)
+                                .size(11.8),
+                        );
+                        if ui.small_button("Bỏ ảnh").clicked() {
+                            remove_image = true;
+                        }
+                    });
+                } else if ui
+                    .add_enabled(
+                        !editor.image_loading,
+                        egui::Button::new(if editor.image_loading {
+                            "Đang thêm ảnh…"
+                        } else {
+                            "+ Thêm ảnh"
+                        }),
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    pick_image = true;
+                }
+                if let Some(error) = editor.error.as_deref() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(error).color(pal.danger).size(11.8));
+                }
+                ui.add_space(10.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    save = ui
+                        .button(if editor.editing_index.is_some() {
+                            "Lưu thay đổi"
+                        } else {
+                            "Thêm"
+                        })
+                        .on_hover_cursor(CursorIcon::PointingHand)
+                        .clicked();
+                    if ui.button("Hủy").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            self.cancel_quick_message_editor();
+        } else if pick_image {
+            self.pick_quick_message_image();
+        } else if remove_image {
+            let removed = self
+                .quick_message_editor
+                .as_mut()
+                .and_then(|editor| editor.image_path.take());
+            if let Some(path) = removed {
+                self.delete_quick_message_image_if_unreferenced(&path);
+            }
+        } else if save && self.commit_quick_message_editor().is_ok() {
+            self.show_toast("Đã lưu tin nhắn nhanh");
+        }
+    }
+}
+
 #[cfg(test)]
 mod changelog_bullet_tests {
     use super::*;
@@ -9659,10 +9750,6 @@ mod tests {
         assert_eq!(compute_call_per_page(460.0), 4);
         assert_eq!(compute_call_per_page(650.0), 6);
         assert_eq!(compute_call_per_page(900.0), 8);
-
-        let qr_defaults = default_quick_reply_items();
-        assert_eq!(qr_defaults.len(), 4);
-        assert!(qr_defaults[0].contains("bận"));
     }
 
     #[test]

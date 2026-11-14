@@ -945,3 +945,18 @@ Entry template:
 - Changes: removed redundant `package.homepage`; `src/chat.rs` `fetch_update` → CAS loop (`try_update` needs Rust 1.95, MSRV is 1.75); `.github/workflows/ci-release.yml` actions bumped to Node 24 lines (checkout@v5, upload-artifact@v6, download-artifact@v7, attest-build-provenance@v4, action-gh-release@v3); version 0.3.1; CHANGELOG. The "ubuntu-latest → Ubuntu 26" and "macOS arm64 queue" annotations are informational, left alone.
 - Verification: `cargo check --locked`, `cargo test --locked` (351 pass). `cargo clippy -D warnings` already fails with 121 pre-existing errors (not touched). CI action major bumps NOT verified until the tag workflow runs.
 - Status: tagged v0.3.1 and pushed (see git log).
+## 2026-11-14 — Tin nhắn nhanh (zlite#2)  (agent: Codex, GPT-5)
+
+- Request: Implement Kanzo task `zlite#2`: remove quick replies attached to rejecting calls and add configurable slash-command quick messages with optional images.
+- Context / root cause: the existing feature was coupled to the incoming-call rejection overlay and could automatically send a fixed text. The requested flow instead stores reusable messages in Settings and inserts a selected `/shortcut` result into the composer without sending it.
+- Changes: added the bounded, validated quick-message model and private managed-image storage in `src/quick_messages.rs`; added Settings management/editor UI and persisted settings in `src/gui.rs` and `src/gui/modals.rs`; added background image import/delete commands in `src/gui/worker.rs`; added slash filtering, keyboard/mouse selection, and draft insertion in `src/gui/workspace.rs`; removed the call-rejection quick-reply UI; updated `src/lib.rs`, `CHANGELOG.md`, and `docs/TINH_NANG.md`.
+- Verification: `cargo fmt --all -- --check`, `git diff --check`, and `cargo check --message-format=short` pass. `cargo test --locked quick_messages --lib` passes (13/13). Full `cargo test --locked` passes (413 passed across unit/integration suites, 2 repository-declared ignored, 0 failed). NOT visually verified in a running native GUI and not committed or pushed.
+- Status: done, pending owner GUI review. Kanzo status update may still require connector write approval.
+
+## 2026-11-14 — Release v0.3.2 with quick messages  (agent: Codex, GPT-5)
+
+- Request: after the owner confirmed the feature works in the native GUI, commit and push the implementation, tag it, and publish `v0.3.2`.
+- Context / root cause: `main` and `origin/main` were even at `v0.3.1`; `v0.3.2` did not exist locally or remotely. The release workflow requires the tag, `Cargo.toml`, `Cargo.lock`, and a versioned CHANGELOG section to agree.
+- Changes: bumped the crate and lockfile to `0.3.2`; moved the curated quick-message notes from Unreleased into the `0.3.2` section. The release includes configurable slash-command quick messages with an optional managed image and removes call-rejection quick replies.
+- Verification: owner confirmed the feature works in the native GUI. `cargo fmt --all -- --check`, `git diff --check`, `cargo metadata --locked --no-deps`, release-note extraction, `cargo check --locked --all-targets --message-format=short`, full `cargo test --locked` (413 passed, 2 repository-declared ignored, 0 failed), and `cargo build --release --locked --bin ctdozlite` all pass at version `0.3.2`.
+- Status: release snapshot verified; owner explicitly authorized commit, push, tag, and publication. GitHub Actions will build and publish the cross-platform artifacts after `v0.3.2` reaches origin.

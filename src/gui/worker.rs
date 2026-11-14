@@ -229,6 +229,14 @@ pub enum WorkerCmd {
         preset_path: Option<std::path::PathBuf>,
         original_hd: bool,
     },
+    /// Pick, validate, and privately copy an image for the quick-message editor.
+    PickQuickMessageImage {
+        request_id: u64,
+    },
+    /// Remove an unreferenced image from the managed quick-message directory.
+    DeleteQuickMessageImage {
+        path: String,
+    },
     TriggerScreenshot,
     SendTyping {
         thread_id: String,
@@ -3468,6 +3476,46 @@ pub(super) fn spawn_session_worker(session: Session, gui_tx: GuiTx, egui_ctx: eg
                                     }
                                 }
                                 ctx_clone.request_repaint();
+                            });
+                        }
+                        WorkerCmd::PickQuickMessageImage { request_id } => {
+                            let gui_tx_clone = gui_tx.clone();
+                            tokio::spawn(async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    let Some(source) = pick_native_file_dialog(true) else {
+                                        return Ok(None);
+                                    };
+                                    let root = std::env::current_dir()
+                                        .map_err(|error| error.to_string())?;
+                                    crate::quick_messages::import_image(&root, &source)
+                                        .map(Some)
+                                        .map_err(|error| error.to_string())
+                                })
+                                .await
+                                .unwrap_or_else(|error| Err(error.to_string()));
+                                let _ = gui_tx_clone.send(GuiEvent::QuickMessageImagePicked {
+                                    request_id,
+                                    result,
+                                });
+                            });
+                        }
+                        WorkerCmd::DeleteQuickMessageImage { path } => {
+                            let gui_tx_clone = gui_tx.clone();
+                            tokio::spawn(async move {
+                                let result = tokio::task::spawn_blocking({
+                                    let path = path.clone();
+                                    move || -> Result<(), String> {
+                                        let root = std::env::current_dir()
+                                            .map_err(|error| error.to_string())?;
+                                        crate::quick_messages::delete_image(&root, &path)
+                                            .map_err(|error| error.to_string())
+                                    }
+                                })
+                                .await
+                                .unwrap_or_else(|error| Err(error.to_string()));
+                                let _ = gui_tx_clone.send(GuiEvent::QuickMessageImageDeleted {
+                                    error: result.err(),
+                                });
                             });
                         }
                         WorkerCmd::TriggerScreenshot => {

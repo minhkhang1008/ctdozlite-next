@@ -30,6 +30,7 @@ Kiểm thử chủ yếu trên macOS. Cách dùng chi tiết: [Hướng dẫn s�
 | Chọn nhiều tin nhắn | ✅ | Menu "…" → Chọn nhiều tin nhắn: Sao chép, Chia sẻ, Xóa hàng loạt |
 | Xem chi tiết tin nhắn | ✅ | Menu "…" → Xem chi tiết |
 | Gửi ảnh & tệp | ✅ | Nút đính kèm, kéo-thả (Gửi nhanh / Xem trước), dán ảnh `⌘V` |
+| Tin nhắn nhanh | ✅ | Tạo/sửa/xoá macro tại **Cài đặt → Tin nhắn**; gõ `/`, chọn bằng ↑/↓ rồi Enter để chèn nội dung và ảnh vào khung soạn thảo |
 | Sticker & gợi ý sticker khi gõ | ✅ | |
 | Tìm và gửi GIF | ✅ | `@gif` hoặc `@gif từ khoá` |
 | Hẹn giờ gửi tin nhắn | ✅ | Nút `🕒` cạnh ô soạn tin |

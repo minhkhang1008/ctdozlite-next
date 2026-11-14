@@ -8,6 +8,14 @@ Xem thêm quy ước tại [ADR 0003 — Chính sách Changelog & Release Notes]
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-14
+
+### Added (Tính năng mới)
+- **Tin nhắn nhanh trong khung soạn thảo:** bật/tắt và quản lý macro tại Cài đặt → Tin nhắn; mỗi macro có phím tắt `/...`, nội dung và một ảnh tùy chọn. Gõ `/` để lọc, dùng ↑/↓ và Enter để đưa nội dung/ảnh vào bản nháp trước khi gửi.
+
+### Removed (Đã bỏ)
+- **Phản hồi nhanh khi từ chối cuộc gọi:** bỏ danh sách mẫu và nút từ chối kèm gửi tự động; thao tác từ chối cuộc gọi trở lại chỉ từ chối.
+
 ## [0.3.1] - 2026-11-14
 
 ### Added (Tính năng mới)
